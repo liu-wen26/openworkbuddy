@@ -15,7 +15,9 @@ ROLE_PERMISSIONS = {
         "paper:upload", "paper:replace", "paper:delete", "paper:view",
         "template:create", "template:update", "template:delete", "template:list",
         "student:import", "student:manage",
-        "exception:resolve", "exception:ignore",
+        "import:create", "import:list", "import:delete", "import:process", "import:view",
+        "exception:list", "exception:view", "exception:resolve", "exception:ignore",
+        "page:preview", "block:recut", "exam_number:manual",
         "analytics:view", "export:download", "archive:create",
         "precheck:run",
         "user:list", "user:view", "user:create",
@@ -23,8 +25,10 @@ ROLE_PERMISSIONS = {
     "group_leader": [
         "exam:list", "exam:view",
         "paper:view",
+        "import:list", "import:view",
         "scoring:distribute", "scoring:arbitrate",
-        "exception:resolve", "exception:ignore",
+        "exception:list", "exception:view", "exception:resolve", "exception:ignore",
+        "page:preview", "block:recut", "exam_number:manual",
         "analytics:view", "export:download",
     ],
     "teacher": [

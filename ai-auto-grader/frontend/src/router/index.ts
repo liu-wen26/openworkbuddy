@@ -8,6 +8,8 @@ import ExamFormView from '@/views/exams/ExamFormView.vue'
 import ExamDetailView from '@/views/exams/ExamDetailView.vue'
 import TemplateListView from '@/views/templates/TemplateListView.vue'
 import TemplateDesignerView from '@/views/templates/TemplateDesignerView.vue'
+import ImportCenterView from '@/views/imports/ImportCenterView.vue'
+import ExceptionCenterView from '@/views/exceptions/ExceptionCenterView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -30,6 +32,8 @@ const router = createRouter({
         { path: 'exams/:id', name: 'ExamDetail', component: ExamDetailView },
         { path: 'templates', name: 'TemplateList', component: TemplateListView },
         { path: 'templates/:id/design', name: 'TemplateDesigner', component: TemplateDesignerView },
+        { path: 'imports', name: 'ImportCenter', component: ImportCenterView },
+        { path: 'exceptions', name: 'ExceptionCenter', component: ExceptionCenterView },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: '/' },

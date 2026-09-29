@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     STORAGE_ROOT: str = "/workspace/ai-auto-grader/storage"
     MAX_UPLOAD_SIZE_MB: int = 50
 
+    # 异步任务：USE_CELERY=False 时使用 FastAPI 后台任务内联执行（无需 Redis）
+    USE_CELERY: bool = False
+    # 图像预处理参数
+    OMR_FILL_THRESHOLD: float = 0.45  # 单个填涂块的判定阈值（0~1，越大越严格）
+
     LLM_PROVIDER: str = "openai"  # openai | local
     LLM_API_BASE: Optional[str] = None
     LLM_API_KEY: Optional[str] = None

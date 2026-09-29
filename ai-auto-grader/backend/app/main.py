@@ -5,7 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.db.base import Base, engine
-from app.api.v1 import auth, users, exams, templates
+from app import models  # noqa: F401  确保所有模型注册到 Base.metadata
+from app.api.v1 import auth, users, exams, templates, imports
 
 
 @asynccontextmanager
@@ -35,6 +36,7 @@ app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
 app.include_router(users.router, prefix=settings.API_V1_PREFIX)
 app.include_router(exams.router, prefix=settings.API_V1_PREFIX)
 app.include_router(templates.router, prefix=settings.API_V1_PREFIX)
+app.include_router(imports.router, prefix=settings.API_V1_PREFIX)
 
 
 @app.get("/health")
