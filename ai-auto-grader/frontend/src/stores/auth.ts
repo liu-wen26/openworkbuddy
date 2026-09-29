@@ -42,6 +42,7 @@ export const useAuthStore = defineStore('auth', () => {
     ]
     if (role === 'super_admin' || role === 'exam_admin') {
       base.push({ path: '/exams', title: '考试管理', icon: 'Document' })
+      base.push({ path: '/templates', title: '答题卡模板', icon: 'Grid' })
     }
     if (role === 'group_leader' || role === 'teacher') {
       base.push({ path: '/exams', title: '考试列表', icon: 'Document' })

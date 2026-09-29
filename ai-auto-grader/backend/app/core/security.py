@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from uuid import UUID
 
 import bcrypt
 from jose import JWTError, jwt
@@ -42,10 +43,13 @@ def decode_token(token: str) -> Optional[TokenPayload]:
         return None
 
 
-async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(security)) -> UUID:
     if credentials is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     payload = decode_token(credentials.credentials)
     if payload is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-    return payload.sub
+    try:
+        return UUID(payload.sub)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject")
