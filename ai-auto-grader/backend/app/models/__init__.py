@@ -7,6 +7,7 @@ from app.models.import_batch import ImportBatch
 from app.models.imported_page import ImportedPage
 from app.models.answer_block import AnswerBlock
 from app.models.exception import ExamException
+from app.models.choice_result import ChoiceResult
 
 __all__ = [
     "User",
@@ -22,4 +23,5 @@ __all__ = [
     "ImportedPage",
     "AnswerBlock",
     "ExamException",
+    "ChoiceResult",
 ]

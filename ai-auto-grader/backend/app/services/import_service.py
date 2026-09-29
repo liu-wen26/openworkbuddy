@@ -362,6 +362,15 @@ def process_batch(batch_id: str | UUID) -> None:
         batch.total_pages = db.query(ImportedPage).filter(ImportedPage.batch_id == batch.id).count()
         batch.processed_pages = batch.total_pages
         db.commit()
+
+        # 导入完成后自动执行选择题判分（失败不影响导入结果）
+        try:
+            from app.services import choice_service
+            stats = choice_service.grade_exam_choices(db, batch.exam_id)
+            logger.info("选择题自动判分完成 exam=%s stats=%s", batch.exam_id, stats)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("选择题自动判分失败 exam=%s: %s", batch.exam_id, exc)
+            db.rollback()
     except Exception as exc:  # noqa: BLE001
         logger.exception("批次处理失败: %s", exc)
         db.rollback()

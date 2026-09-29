@@ -18,6 +18,7 @@ ROLE_PERMISSIONS = {
         "import:create", "import:list", "import:delete", "import:process", "import:view",
         "exception:list", "exception:view", "exception:resolve", "exception:ignore",
         "page:preview", "block:recut", "exam_number:manual",
+        "choice:grade", "choice:review", "choice:view",
         "analytics:view", "export:download", "archive:create",
         "precheck:run",
         "user:list", "user:view", "user:create",
@@ -29,12 +30,14 @@ ROLE_PERMISSIONS = {
         "scoring:distribute", "scoring:arbitrate",
         "exception:list", "exception:view", "exception:resolve", "exception:ignore",
         "page:preview", "block:recut", "exam_number:manual",
+        "choice:grade", "choice:review", "choice:view",
         "analytics:view", "export:download",
     ],
     "teacher": [
         "exam:list", "exam:view",
         "paper:view",
         "scoring:grade", "scoring:view_own",
+        "choice:view",
         "analytics:view_limited",
     ],
 }

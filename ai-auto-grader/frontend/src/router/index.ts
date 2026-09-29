@@ -10,6 +10,7 @@ import TemplateListView from '@/views/templates/TemplateListView.vue'
 import TemplateDesignerView from '@/views/templates/TemplateDesignerView.vue'
 import ImportCenterView from '@/views/imports/ImportCenterView.vue'
 import ExceptionCenterView from '@/views/exceptions/ExceptionCenterView.vue'
+import ChoiceReviewView from '@/views/choices/ChoiceReviewView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -34,6 +35,7 @@ const router = createRouter({
         { path: 'templates/:id/design', name: 'TemplateDesigner', component: TemplateDesignerView },
         { path: 'imports', name: 'ImportCenter', component: ImportCenterView },
         { path: 'exceptions', name: 'ExceptionCenter', component: ExceptionCenterView },
+        { path: 'choices', name: 'ChoiceReview', component: ChoiceReviewView },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: '/' },

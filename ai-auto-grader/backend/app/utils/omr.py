@@ -225,3 +225,103 @@ def recognize_exam_number(
         return result
 
     return None, 0.0
+
+
+# ---------------- 选择题填涂识别 ----------------
+
+def _choice_ratios_by_contours(gray: np.ndarray, options_count: int) -> Optional[List[float]]:
+    """轮廓检测回退：假设选择题选项为单列垂直排列，返回每个选项的填涂占比。"""
+    bubbles = detect_bubbles(gray)
+    if len(bubbles) < options_count:
+        return None
+
+    xs = sorted(b[0] for b in bubbles)
+    col_x = xs[len(xs) // 2]  # 取中位 x 作为选项列中心
+    h, w = gray.shape[:2]
+    x_tol = max(3.0, w * 0.15)
+    column = [b for b in bubbles if abs(b[0] - col_x) <= x_tol]
+    if len(column) < options_count:
+        column = bubbles  # 退化：直接使用全部气泡
+
+    row_centers = _cluster_1d([b[1] for b in column], options_count)
+    if len(row_centers) != options_count:
+        return None
+
+    row_spacing = (row_centers[-1] - row_centers[0]) / max(options_count - 1, 1)
+    ratios: List[float] = []
+    for rc in row_centers:
+        near = [b for b in bubbles if abs(b[1] - rc) <= max(row_spacing * 0.5, 3)]
+        ratios.append(max((b[2] for b in near), default=0.0))
+    return ratios
+
+
+def recognize_choice(
+    region_image: np.ndarray,
+    options_count: int = 4,
+    fill_threshold: float = 0.45,
+    option_x_fraction: Optional[float] = None,
+    option_y_fractions: Optional[Sequence[float]] = None,
+    bubble_radius_fraction: float = 0.02,
+    ambiguity_margin: float = 0.12,
+) -> dict:
+    """识别选择题区域的填涂结果。
+
+    返回 dict：
+      options    —— 已填涂选项字母（按字母序，如 "AC"；空串表示未填涂）
+      ratios     —— 各选项填涂占比（A、B、C… 顺序）
+      confidence —— 置信度 0~1
+      status     —— ok / blank / multi / ambiguous / unreadable
+    仅返回客观识别结果，是否构成异常由调用方（判分服务）结合题型判定。
+    """
+    letters = [chr(ord("A") + i) for i in range(options_count)]
+    empty = {"options": "", "ratios": [0.0] * options_count, "confidence": 0.0, "status": "unreadable"}
+
+    gray = to_gray(region_image)
+    if gray.size == 0 or options_count < 2:
+        return empty
+
+    h, w = gray.shape[:2]
+    binary = _binarize(gray)
+
+    ratios: Optional[List[float]] = None
+    if option_x_fraction is not None and option_y_fractions and len(option_y_fractions) >= options_count:
+        radius = max(2, int(round(bubble_radius_fraction * h)))
+        cx = option_x_fraction * w
+        ratios = [
+            _sample_core_ratio(binary, cx, option_y_fractions[i] * h, radius)
+            for i in range(options_count)
+        ]
+    else:
+        ratios = _choice_ratios_by_contours(gray, options_count)
+
+    if ratios is None:
+        return empty
+
+    ordered = sorted(range(options_count), key=lambda i: -ratios[i])
+    filled = [i for i in range(options_count) if ratios[i] >= fill_threshold]
+    top = ratios[ordered[0]]
+    second = ratios[ordered[1]] if options_count > 1 else 0.0
+
+    if not filled:
+        status = "blank"
+        options = ""
+    elif len(filled) > 1:
+        status = "multi"
+        options = "".join(letters[i] for i in sorted(filled))
+    else:
+        options = letters[ordered[0]]
+        if second >= fill_threshold * 0.8 and (top - second) <= ambiguity_margin:
+            status = "ambiguous"
+        else:
+            status = "ok"
+
+    confidence = float(np.clip(0.6 * min(top / 0.8, 1.0) + 0.4 * min(max(top - second, 0.0) / 0.4, 1.0), 0.0, 1.0))
+    if status in ("blank", "unreadable"):
+        confidence = 0.0
+
+    return {
+        "options": options,
+        "ratios": [round(float(r), 4) for r in ratios],
+        "confidence": round(confidence, 3),
+        "status": status,
+    }
