@@ -9,6 +9,7 @@ from app.models.answer_block import AnswerBlock
 from app.models.exception import ExamException
 from app.models.choice_result import ChoiceResult
 from app.models.subjective_result import SubjectiveResult, GradingLog
+from app.models.precheck import PrecheckSession, PrecheckPage
 
 __all__ = [
     "User",
@@ -27,4 +28,6 @@ __all__ = [
     "ChoiceResult",
     "SubjectiveResult",
     "GradingLog",
+    "PrecheckSession",
+    "PrecheckPage",
 ]

@@ -22,7 +22,7 @@ ROLE_PERMISSIONS = {
         "scoring:grade", "scoring:ai", "scoring:distribute", "scoring:arbitrate",
         "scoring:view_all", "scoring:log",
         "analytics:view", "export:download", "archive:create",
-        "precheck:run",
+        "precheck:view", "precheck:upload", "precheck:run", "precheck:clear",
         "user:list", "user:view", "user:create",
     ],
     "group_leader": [
@@ -35,6 +35,7 @@ ROLE_PERMISSIONS = {
         "page:preview", "block:recut", "exam_number:manual",
         "choice:grade", "choice:review", "choice:view",
         "analytics:view", "export:download",
+        "precheck:view", "precheck:upload", "precheck:run", "precheck:clear",
     ],
     "teacher": [
         "exam:list", "exam:view",

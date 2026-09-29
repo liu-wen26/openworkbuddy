@@ -12,6 +12,7 @@ import ImportCenterView from '@/views/imports/ImportCenterView.vue'
 import ExceptionCenterView from '@/views/exceptions/ExceptionCenterView.vue'
 import ChoiceReviewView from '@/views/choices/ChoiceReviewView.vue'
 import GradingWorkbenchView from '@/views/grading/GradingWorkbenchView.vue'
+import PrecheckView from '@/views/precheck/PrecheckView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -38,6 +39,7 @@ const router = createRouter({
         { path: 'exceptions', name: 'ExceptionCenter', component: ExceptionCenterView },
         { path: 'choices', name: 'ChoiceReview', component: ChoiceReviewView },
         { path: 'grading', name: 'GradingWorkbench', component: GradingWorkbenchView },
+        { path: 'precheck', name: 'Precheck', component: PrecheckView },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: '/' },

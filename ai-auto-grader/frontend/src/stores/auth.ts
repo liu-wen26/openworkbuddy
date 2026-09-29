@@ -43,6 +43,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (role === 'super_admin' || role === 'exam_admin') {
       base.push({ path: '/exams', title: '考试管理', icon: 'Document' })
       base.push({ path: '/templates', title: '答题卡模板', icon: 'Grid' })
+      base.push({ path: '/precheck', title: '预阅卷预览', icon: 'View' })
       base.push({ path: '/imports', title: '答卷导入', icon: 'UploadFilled' })
       base.push({ path: '/exceptions', title: '异常中心', icon: 'Warning' })
       base.push({ path: '/choices', title: '选择题判分', icon: 'List' })
@@ -56,6 +57,7 @@ export const useAuthStore = defineStore('auth', () => {
       base.push({ path: '/imports', title: '答卷导入', icon: 'UploadFilled' })
       base.push({ path: '/exceptions', title: '异常中心', icon: 'Warning' })
       base.push({ path: '/choices', title: '选择题判分', icon: 'List' })
+      base.push({ path: '/precheck', title: '预阅卷预览', icon: 'View' })
     }
     return base
   })
