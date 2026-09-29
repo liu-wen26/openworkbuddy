@@ -11,6 +11,7 @@ import TemplateDesignerView from '@/views/templates/TemplateDesignerView.vue'
 import ImportCenterView from '@/views/imports/ImportCenterView.vue'
 import ExceptionCenterView from '@/views/exceptions/ExceptionCenterView.vue'
 import ChoiceReviewView from '@/views/choices/ChoiceReviewView.vue'
+import GradingWorkbenchView from '@/views/grading/GradingWorkbenchView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -36,6 +37,7 @@ const router = createRouter({
         { path: 'imports', name: 'ImportCenter', component: ImportCenterView },
         { path: 'exceptions', name: 'ExceptionCenter', component: ExceptionCenterView },
         { path: 'choices', name: 'ChoiceReview', component: ChoiceReviewView },
+        { path: 'grading', name: 'GradingWorkbench', component: GradingWorkbenchView },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: '/' },

@@ -8,6 +8,7 @@ from app.models.imported_page import ImportedPage
 from app.models.answer_block import AnswerBlock
 from app.models.exception import ExamException
 from app.models.choice_result import ChoiceResult
+from app.models.subjective_result import SubjectiveResult, GradingLog
 
 __all__ = [
     "User",
@@ -24,4 +25,6 @@ __all__ = [
     "AnswerBlock",
     "ExamException",
     "ChoiceResult",
+    "SubjectiveResult",
+    "GradingLog",
 ]

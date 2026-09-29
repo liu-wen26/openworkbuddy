@@ -28,3 +28,7 @@ export function login(data: LoginForm) {
 export function getMe() {
   return request.get<User>('/auth/me')
 }
+
+export function listUsers() {
+  return request.get<User[]>('/users')
+}

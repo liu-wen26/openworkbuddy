@@ -22,6 +22,12 @@ def load_image(path: str | Path) -> np.ndarray:
     return image
 
 
+def decode_image(data) -> Optional[np.ndarray]:
+    """从字节流或 numpy 缓冲区解码图像，统一为 BGR 三通道；失败返回 None。"""
+    buf = np.frombuffer(data, dtype=np.uint8) if isinstance(data, (bytes, bytearray)) else data
+    return cv2.imdecode(buf, cv2.IMREAD_COLOR)
+
+
 def save_image(image: np.ndarray, path: str | Path) -> None:
     """保存图像，支持中文路径。"""
     path = Path(path)
