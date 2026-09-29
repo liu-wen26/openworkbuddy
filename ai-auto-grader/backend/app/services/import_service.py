@@ -2,7 +2,9 @@
 题块切割以及异常生成。处理流水线被 Celery 任务与内联后台任务共用。
 """
 
+import json
 import logging
+import math
 import shutil
 import uuid
 import zipfile
@@ -103,20 +105,9 @@ def save_files(db: Session, batch: ImportBatch, files: List[UploadFile]) -> List
         stored_name = f"{uuid.uuid4().hex}{suffix}"
         rel_path = save_upload_to(file, source_dir, stored_name)
 
-        if batch.import_type == "pdf":
-            if suffix != ".pdf":
-                continue
-            accepted += 1
-            _register_pdf_pages(db, batch, rel_path)
-        else:
-            if suffix == ".zip":
-                accepted += 1
-                _extract_zip_images(db, batch, rel_path, source_dir)
-            elif suffix in IMAGE_EXTENSIONS:
-                accepted += 1
-                _register_image_page(db, batch, rel_path, filename)
-            else:
-                continue
+        if not _accept_saved_file(db, batch, rel_path, filename):
+            continue
+        accepted += 1
 
     batch.total_files += accepted
     db.flush()
@@ -124,6 +115,24 @@ def save_files(db: Session, batch: ImportBatch, files: List[UploadFile]) -> List
     db.commit()
     db.refresh(batch)
     return db.query(ImportedPage).filter(ImportedPage.batch_id == batch.id).all()
+
+
+def _accept_saved_file(db: Session, batch: ImportBatch, rel_path: str, original_name: str) -> bool:
+    """登记一个已落盘的文件为答卷页。返回是否被接受。"""
+    suffix = Path(rel_path).suffix.lower()
+    if batch.import_type == "pdf":
+        if suffix != ".pdf":
+            return False
+        _register_pdf_pages(db, batch, rel_path)
+        return True
+
+    if suffix == ".zip":
+        _extract_zip_images(db, batch, rel_path, absolute_path(rel_path).parent)
+        return True
+    if suffix in IMAGE_EXTENSIONS:
+        _register_image_page(db, batch, rel_path, original_name)
+        return True
+    return False
 
 
 def _register_pdf_pages(db: Session, batch: ImportBatch, rel_path: str) -> None:
@@ -174,6 +183,125 @@ def _extract_zip_images(db: Session, batch: ImportBatch, rel_path: str, source_d
                 _register_image_page(db, batch, relative_to_root(target), info.filename)
     except zipfile.BadZipFile:
         logger.warning("无效的 zip 包: %s", rel_path)
+
+
+# ---------------- 分片上传 / 断点续传 ----------------
+
+DEFAULT_CHUNK_SIZE = 4 * 1024 * 1024  # 4MB
+
+
+def _chunk_dir(batch: ImportBatch, upload_id: str) -> Path:
+    return get_batch_dir(batch.exam_id, batch.id, f"chunks/{upload_id}")
+
+
+def _chunk_meta(batch: ImportBatch, upload_id: str) -> dict:
+    meta_path = _chunk_dir(batch, upload_id) / "meta.json"
+    if not meta_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="分片上传会话不存在或已过期")
+    return json.loads(meta_path.read_text(encoding="utf-8"))
+
+
+def _validate_filename(batch: ImportBatch, filename: str) -> None:
+    suffix = Path(filename).suffix.lower()
+    if batch.import_type == "pdf":
+        if suffix != ".pdf":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="PDF 模式仅支持 .pdf 文件")
+    elif suffix not in IMAGE_EXTENSIONS and suffix != ".zip":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="图片模式仅支持 jpg/png/bmp/tif/webp 及 .zip 图片包",
+        )
+
+
+def init_chunk_upload(
+    db: Session, batch: ImportBatch, filename: str, total_size: int, chunk_size: Optional[int] = None
+) -> dict:
+    """创建分片上传会话，返回分片参数与已接收分片列表（用于断点续传）。"""
+    _validate_filename(batch, filename)
+    size = int(chunk_size) if chunk_size else DEFAULT_CHUNK_SIZE
+    size = max(256 * 1024, min(size, 32 * 1024 * 1024))
+
+    upload_id = uuid.uuid4().hex
+    total_chunks = max(1, math.ceil(total_size / size))
+    chunk_dir = _chunk_dir(batch, upload_id)
+    ensure_dir(chunk_dir)
+    meta = {
+        "filename": filename,
+        "total_size": int(total_size),
+        "chunk_size": size,
+        "total_chunks": total_chunks,
+    }
+    (chunk_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    return {"upload_id": upload_id, **meta, "received": [], "completed": False}
+
+
+def chunk_upload_status(batch: ImportBatch, upload_id: str) -> dict:
+    meta = _chunk_meta(batch, upload_id)
+    chunk_dir = _chunk_dir(batch, upload_id)
+    received = sorted(
+        int(p.name.split("_")[1]) for p in chunk_dir.glob("part_*") if p.name.split("_")[1].isdigit()
+    )
+    return {
+        "upload_id": upload_id,
+        **meta,
+        "received": received,
+        "completed": len(received) == meta["total_chunks"],
+    }
+
+
+def save_chunk(batch: ImportBatch, upload_id: str, index: int, data: bytes) -> dict:
+    """写入单个分片（幂等，重复上传同序号分片会覆盖），返回最新状态。"""
+    meta = _chunk_meta(batch, upload_id)
+    if index < 0 or index >= meta["total_chunks"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="分片序号越界")
+    if not data:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="分片内容为空")
+
+    target = _chunk_dir(batch, upload_id) / f"part_{index:05d}"
+    target.write_bytes(data)
+    return chunk_upload_status(batch, upload_id)
+
+
+def complete_chunk_upload(db: Session, batch: ImportBatch, upload_id: str) -> dict:
+    """校验分片完整性，合并落盘并登记答卷页。"""
+    state = chunk_upload_status(batch, upload_id)
+    if not state["completed"]:
+        missing = state["total_chunks"] - len(state["received"])
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"分片不完整，仍缺少 {missing} 个分片",
+        )
+
+    chunk_dir = _chunk_dir(batch, upload_id)
+    source_sub = "source_pdfs" if batch.import_type == "pdf" else "source_images"
+    source_dir = get_batch_dir(batch.exam_id, batch.id, source_sub)
+    suffix = Path(state["filename"]).suffix.lower()
+    target = source_dir / f"{uuid.uuid4().hex}{suffix}"
+
+    existing_ids = {p.id for p in db.query(ImportedPage.id).filter(ImportedPage.batch_id == batch.id).all()}
+
+    with open(target, "wb") as out:
+        for i in range(state["total_chunks"]):
+            out.write((chunk_dir / f"part_{i:05d}").read_bytes())
+
+    shutil.rmtree(chunk_dir, ignore_errors=True)
+
+    rel_path = relative_to_root(target)
+    if not _accept_saved_file(db, batch, rel_path, state["filename"]):
+        target.unlink(missing_ok=True)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文件类型不受支持")
+
+    batch.total_files += 1
+    db.flush()
+    batch.total_pages = db.query(ImportedPage).filter(ImportedPage.batch_id == batch.id).count()
+    db.commit()
+    db.refresh(batch)
+
+    pages = [
+        p for p in db.query(ImportedPage).filter(ImportedPage.batch_id == batch.id).all()
+        if p.id not in existing_ids
+    ]
+    return {"batch": batch, "pages": pages}
 
 
 # ---------------- 处理流水线 ----------------
@@ -646,6 +774,11 @@ def _load_page_image(page: ImportedPage) -> np.ndarray:
     if page.source_type == "pdf" and full_path.suffix.lower() == ".pdf":
         return _render_pdf_page(full_path, page.original_page_index or 0)
     return image_utils.load_image(full_path)
+
+
+def load_page_source_image(page: ImportedPage) -> np.ndarray:
+    """读取/渲染答卷原文件为图像（PDF 自动转图），供前端交互使用。"""
+    return _load_page_image(page)
 
 
 def _render_pdf_page(path: Path, page_index: int) -> np.ndarray:

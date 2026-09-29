@@ -113,10 +113,11 @@ export function deleteImportBatch(batchId: string) {
   return request.delete(`/imports/batches/${batchId}`)
 }
 
-export function uploadSourceFiles(batchId: string, files: File[]) {
+export function uploadSourceFiles(batchId: string, files: File[], autoProcess = true) {
   const form = new FormData()
   files.forEach((file) => form.append('files', file))
   return request.post(`/imports/batches/${batchId}/files`, form, {
+    params: { auto_process: autoProcess },
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 300000,
   })
@@ -128,6 +129,49 @@ export function getImportProgress(batchId: string) {
 
 export function processImportBatch(batchId: string) {
   return request.post<ImportProgress>(`/imports/batches/${batchId}/process`)
+}
+
+// ---------------- 分片上传 / 断点续传 ----------------
+
+export interface ChunkUploadStatus {
+  upload_id: string
+  filename: string
+  total_size: number
+  chunk_size: number
+  total_chunks: number
+  received: number[]
+  completed: boolean
+}
+
+export function initChunkUpload(
+  batchId: string,
+  data: { filename: string; total_size: number; chunk_size?: number },
+) {
+  return request.post<ChunkUploadStatus>(`/imports/batches/${batchId}/uploads`, data)
+}
+
+export function getChunkUploadStatus(batchId: string, uploadId: string) {
+  return request.get<ChunkUploadStatus>(`/imports/batches/${batchId}/uploads/${uploadId}`)
+}
+
+export function uploadChunk(batchId: string, uploadId: string, index: number, blob: Blob) {
+  return request.put<ChunkUploadStatus>(
+    `/imports/batches/${batchId}/uploads/${uploadId}`,
+    blob,
+    {
+      params: { index },
+      headers: { 'Content-Type': 'application/octet-stream' },
+      timeout: 120000,
+    },
+  )
+}
+
+export function completeChunkUpload(batchId: string, uploadId: string, autoProcess = true) {
+  return request.post<{ batch: ImportBatch; pages: ImportedPage[]; mode: string }>(
+    `/imports/batches/${batchId}/uploads/${uploadId}/complete`,
+    null,
+    { params: { auto_process: autoProcess }, timeout: 120000 },
+  )
 }
 
 // ---------------- 答卷页与题块 ----------------
@@ -160,6 +204,16 @@ export function recutPage(pageId: string, perspectivePoints?: number[][]) {
 
 export async function getPageImageUrl(pageId: string) {
   const res = await request.get(`/imports/pages/${pageId}/image`, { responseType: 'blob' })
+  return URL.createObjectURL(res.data)
+}
+
+export async function getPageOriginalUrl(pageId: string) {
+  const res = await request.get(`/imports/pages/${pageId}/original`, { responseType: 'blob' })
+  return URL.createObjectURL(res.data)
+}
+
+export async function getPageSourceImageUrl(pageId: string) {
+  const res = await request.get(`/imports/pages/${pageId}/source-image`, { responseType: 'blob' })
   return URL.createObjectURL(res.data)
 }
 

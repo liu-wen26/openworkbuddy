@@ -39,6 +39,14 @@ def to_gray(image: np.ndarray) -> np.ndarray:
     return image
 
 
+def encode_png(image: np.ndarray) -> bytes:
+    """将图像编码为 PNG 字节流，用于直接返回给前端预览。"""
+    ok, buf = cv2.imencode(".png", image)
+    if not ok:
+        raise ValueError("无法编码 PNG 图像")
+    return buf.tobytes()
+
+
 def detect_tilt_angle(image: np.ndarray, max_angle: float = 15.0, step: float = 0.5) -> float:
     """基于投影轮廓法估计文档倾斜角度（度）。返回 0 表示未检测到明显倾斜。
 

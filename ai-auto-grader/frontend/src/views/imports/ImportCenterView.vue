@@ -65,7 +65,12 @@
         >
           开始导入（{{ fileList.length }} 个文件）
         </el-button>
-        <el-button :disabled="fileList.length === 0" @click="clearFiles">清空</el-button>
+        <el-button :disabled="fileList.length === 0 || uploading" @click="clearFiles">清空</el-button>
+      </div>
+
+      <div v-if="uploading" class="upload-progress">
+        <el-progress :percentage="uploadPercent" :stroke-width="14" />
+        <span class="muted">{{ uploadHint }}</span>
       </div>
     </el-card>
 
@@ -144,10 +149,11 @@
             <el-tag :type="pageStatusType(row.status)" size="small">{{ pageStatusText(row.status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="操作" width="300" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="previewPage(row)">预览</el-button>
             <el-button link type="primary" @click="promptExamNumber(row)">指定考号</el-button>
+            <el-button link type="primary" @click="openPerspective(row)">透视矫正</el-button>
             <el-button link type="warning" @click="recut(row)">重新切割</el-button>
           </template>
         </el-table-column>
@@ -172,6 +178,13 @@
         </div>
       </div>
     </el-dialog>
+
+    <!-- 手动四点透视矫正 -->
+    <PerspectiveCorrectDialog
+      v-model="perspectiveVisible"
+      :page-id="perspectivePageId"
+      @applied="onPerspectiveApplied"
+    />
   </div>
 </template>
 
@@ -182,23 +195,29 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { getExams, type Exam } from '@/api/exams'
 import { useAuthStore } from '@/stores/auth'
 import {
+  completeChunkUpload,
   createImportBatch,
   deleteImportBatch,
   getBlockImageUrl,
   getImportProgress,
   getPageImageUrl,
+  initChunkUpload,
   listBatchPages,
   listImportBatches,
   listPageBlocks,
   processImportBatch,
   recutPage,
   setPageExamNumber,
+  uploadChunk,
   uploadSourceFiles,
   type AnswerBlock,
   type ImportBatch,
   type ImportType,
   type ImportedPage,
 } from '@/api/imports'
+import PerspectiveCorrectDialog from './components/PerspectiveCorrectDialog.vue'
+
+const LARGE_FILE_THRESHOLD = 10 * 1024 * 1024 // 10MB 以上走分片上传
 
 const route = useRoute()
 const router = useRouter()
@@ -209,8 +228,13 @@ const examId = ref<string>('')
 const importType = ref<ImportType>('pdf')
 const fileList = ref<any[]>([])
 const uploading = ref(false)
+const uploadPercent = ref(0)
+const uploadHint = ref('')
 const loading = ref(false)
 const batches = ref<ImportBatch[]>([])
+
+const perspectiveVisible = ref(false)
+const perspectivePageId = ref('')
 
 const pagesVisible = ref(false)
 const pagesLoading = ref(false)
@@ -326,18 +350,75 @@ function clearFiles() {
 async function startImport() {
   if (!examId.value) return
   uploading.value = true
+  uploadPercent.value = 0
+  uploadHint.value = '正在创建导入批次…'
   try {
-    const createRes = await createImportBatch({ exam_id: examId.value, import_type: importType.value })
     const files = fileList.value.map((f) => f.raw as File).filter(Boolean)
-    await uploadSourceFiles(createRes.data.id, files)
+    const totalBytes = files.reduce((sum, f) => sum + f.size, 0) || 1
+    const createRes = await createImportBatch({ exam_id: examId.value, import_type: importType.value })
+    const batchId = createRes.data.id
+
+    let uploadedBytes = 0
+    const updateProgress = (name: string) => {
+      uploadPercent.value = Math.min(99, Math.round((uploadedBytes / totalBytes) * 100))
+      uploadHint.value = `正在上传：${name}`
+    }
+
+    const small: File[] = []
+    for (const f of files) {
+      if (f.size > LARGE_FILE_THRESHOLD) {
+        await uploadLargeFile(batchId, f, (done) => {
+          updateProgress(f.name)
+          uploadedBytes += done
+        })
+      } else {
+        small.push(f)
+      }
+    }
+
+    if (small.length) {
+      uploadHint.value = `正在上传 ${small.length} 个小文件…`
+      await uploadSourceFiles(batchId, small, false)
+    }
+
+    uploadPercent.value = 100
+    uploadHint.value = '上传完成，正在后台处理…'
+    await processImportBatch(batchId)
     ElMessage.success('上传成功，正在后台处理')
     clearFiles()
     await loadBatches()
-  } catch (e) {
+  } catch {
     // 错误已由拦截器提示
   } finally {
     uploading.value = false
+    uploadHint.value = ''
   }
+}
+
+/** 分片上传单个大文件，支持断点续传（跳过已接收分片）。 */
+async function uploadLargeFile(batchId: string, file: File, onBytes: (bytes: number) => void) {
+  const initRes = await initChunkUpload(batchId, { filename: file.name, total_size: file.size })
+  const { upload_id, chunk_size, total_chunks, received } = initRes.data
+  const done = new Set<number>(received)
+
+  for (let i = 0; i < total_chunks; i++) {
+    if (done.has(i)) continue
+    const start = i * chunk_size
+    const end = Math.min(start + chunk_size, file.size)
+    const blob = file.slice(start, end)
+    await uploadChunk(batchId, upload_id, i, blob)
+    onBytes(end - start)
+  }
+  await completeChunkUpload(batchId, upload_id, false)
+}
+
+function openPerspective(row: ImportedPage) {
+  perspectivePageId.value = row.id
+  perspectiveVisible.value = true
+}
+
+async function onPerspectiveApplied() {
+  await loadPages()
 }
 
 async function reprocess(row: ImportBatch) {
@@ -444,6 +525,12 @@ onUnmounted(() => {
 }
 .upload-actions {
   margin-top: 16px;
+}
+.upload-progress {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 .muted {
   color: #909399;

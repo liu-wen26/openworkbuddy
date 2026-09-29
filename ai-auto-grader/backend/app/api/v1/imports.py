@@ -2,8 +2,8 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,8 @@ from app.models.student import Student
 from app.models.user import User
 from app.schemas.imports import (
     AnswerBlockOut,
+    ChunkUploadInitIn,
+    ChunkUploadStatusOut,
     ExceptionOut,
     ExceptionUpdate,
     ImportBatchCreate,
@@ -31,6 +33,7 @@ from app.schemas.imports import (
 )
 from app.services import import_service
 from app.tasks.import_tasks import dispatch_process_batch
+from app.utils import image as image_utils
 from app.utils.file_storage import absolute_path
 
 router = APIRouter(prefix="/imports", tags=["Imports"])
@@ -97,6 +100,74 @@ def upload_files(
     return ImportUploadResult(
         batch=ImportBatchOut.model_validate(batch),
         pages=[_page_out(db, p) for p in pages],
+        mode=mode,
+    )
+
+
+@router.post("/batches/{batch_id}/uploads", response_model=ChunkUploadStatusOut)
+def init_chunk_upload(
+    batch_id: UUID,
+    payload: ChunkUploadInitIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("import:create")),
+):
+    """创建分片上传会话，返回分片大小与总分片数。"""
+    batch = import_service.get_batch_or_404(db, batch_id)
+    if batch.status == "processing":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="批次正在处理中，请稍后再试")
+    return import_service.init_chunk_upload(
+        db, batch, payload.filename, payload.total_size, payload.chunk_size
+    )
+
+
+@router.get("/batches/{batch_id}/uploads/{upload_id}", response_model=ChunkUploadStatusOut)
+def get_chunk_upload_status(
+    batch_id: UUID,
+    upload_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("import:create")),
+):
+    """查询分片上传进度，已接收分片列表用于断点续传。"""
+    batch = import_service.get_batch_or_404(db, batch_id)
+    return import_service.chunk_upload_status(batch, upload_id)
+
+
+@router.put("/batches/{batch_id}/uploads/{upload_id}", response_model=ChunkUploadStatusOut)
+async def upload_chunk(
+    batch_id: UUID,
+    upload_id: str,
+    request: Request,
+    index: int = Query(..., ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("import:create")),
+):
+    """上传单个分片，请求体为原始二进制数据（application/octet-stream）。"""
+    batch = import_service.get_batch_or_404(db, batch_id)
+    data = await request.body()
+    return import_service.save_chunk(batch, upload_id, index, data)
+
+
+@router.post("/batches/{batch_id}/uploads/{upload_id}/complete", response_model=ImportUploadResult)
+def complete_chunk_upload(
+    batch_id: UUID,
+    upload_id: str,
+    background_tasks: BackgroundTasks,
+    auto_process: bool = Query(default=True),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("import:create")),
+):
+    """合并分片并登记答卷页，可选自动触发处理流水线。"""
+    batch = import_service.get_batch_or_404(db, batch_id)
+    if batch.status == "processing":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="批次正在处理中，请稍后再试")
+
+    result = import_service.complete_chunk_upload(db, batch, upload_id)
+    mode = "none"
+    if auto_process:
+        mode = dispatch_process_batch(batch.id, background_tasks)
+    return ImportUploadResult(
+        batch=ImportBatchOut.model_validate(result["batch"]),
+        pages=[_page_out(db, p) for p in result["pages"]],
         mode=mode,
     )
 
@@ -215,6 +286,21 @@ def get_page_original(
 ):
     page = _page_or_404(db, page_id)
     return _file_response(page.original_file_path)
+
+
+@router.get("/pages/{page_id}/source-image")
+def get_page_source_image(
+    page_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("page:preview")),
+):
+    """把答卷原文件渲染为 PNG 图像，供四点透视矫正等前端交互使用。"""
+    page = _page_or_404(db, page_id)
+    try:
+        image = import_service.load_page_source_image(page)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"无法渲染答卷原图: {exc}")
+    return Response(content=image_utils.encode_png(image), media_type="image/png")
 
 
 @router.get("/pages/{page_id}/blocks", response_model=List[AnswerBlockOut])

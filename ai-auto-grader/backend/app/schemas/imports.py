@@ -123,3 +123,21 @@ class ImportUploadResult(BaseModel):
     batch: ImportBatchOut
     pages: List[ImportedPageOut]
     mode: str
+
+
+# ---------------- 分片上传 ----------------
+
+class ChunkUploadInitIn(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=255)
+    total_size: int = Field(..., gt=0)
+    chunk_size: Optional[int] = Field(default=None, gt=0)
+
+
+class ChunkUploadStatusOut(BaseModel):
+    upload_id: str
+    filename: str
+    total_size: int
+    chunk_size: int
+    total_chunks: int
+    received: List[int] = []
+    completed: bool = False
