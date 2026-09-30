@@ -216,12 +216,14 @@ import {
   type ImportedPage,
 } from '@/api/imports'
 import PerspectiveCorrectDialog from './components/PerspectiveCorrectDialog.vue'
+import { useRealtime } from '@/composables/useRealtime'
 
 const LARGE_FILE_THRESHOLD = 10 * 1024 * 1024 // 10MB 以上走分片上传
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const realtime = useRealtime()
 
 const exams = ref<Exam[]>([])
 const examId = ref<string>('')
@@ -294,7 +296,40 @@ function onExamChange() {
   batches.value = []
   pagesVisible.value = false
   router.replace({ query: { exam_id: examId.value } })
+  syncRealtimeTopic()
   loadBatches()
+}
+
+let realtimeTopic = ''
+let stopImportProgress: (() => void) | null = null
+const notifiedBatches = new Set<string>()
+
+function syncRealtimeTopic() {
+  if (realtimeTopic) realtime.unsubscribe(realtimeTopic)
+  realtimeTopic = ''
+  if (examId.value) {
+    realtimeTopic = `exam:${examId.value}`
+    realtime.subscribe(realtimeTopic)
+  }
+}
+
+/** 实时进度回调：直接更新对应批次行，WebSocket 不可用时仍由轮询兜底。 */
+function handleImportProgress(data: Record<string, unknown>) {
+  const batchId = data.batch_id as string
+  const row = batches.value.find((b) => b.id === batchId)
+  if (!row) return
+  row.processed_pages = (data.processed_pages as number) ?? row.processed_pages
+  row.total_pages = (data.total_pages as number) ?? row.total_pages
+  row.status = (data.status as ImportBatch['status']) ?? row.status
+  row.message = (data.message as string | null) ?? row.message
+  if (row.status === 'completed' && !notifiedBatches.has(batchId)) {
+    notifiedBatches.add(batchId)
+    ElMessage.success('答卷导入完成')
+  } else if (row.status === 'failed' && !notifiedBatches.has(batchId)) {
+    notifiedBatches.add(batchId)
+    ElMessage.error(row.message || '答卷导入失败')
+  }
+  syncPolling()
 }
 
 async function loadBatches() {
@@ -501,9 +536,15 @@ function clearPreview() {
   previewBlocks.value = []
 }
 
-onMounted(loadExams)
+onMounted(async () => {
+  stopImportProgress = realtime.on('import_progress', handleImportProgress)
+  await loadExams()
+  syncRealtimeTopic()
+})
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
+  stopImportProgress?.()
+  if (realtimeTopic) realtime.unsubscribe(realtimeTopic)
   clearPreview()
 })
 </script>

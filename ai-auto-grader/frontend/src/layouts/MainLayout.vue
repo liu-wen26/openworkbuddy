@@ -19,6 +19,7 @@
     <el-container>
       <el-header class="header">
         <div class="header-right">
+          <NotificationCenter />
           <span>{{ auth.user?.real_name }} ({{ roleText }})</span>
           <el-button type="primary" link @click="logout">退出登录</el-button>
         </div>
@@ -38,9 +39,12 @@ import { computed, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { getPublicWatermark, type WatermarkConfig } from '@/api/system'
+import NotificationCenter from '@/components/NotificationCenter.vue'
+import { useRealtime } from '@/composables/useRealtime'
 
 const auth = useAuthStore()
 const router = useRouter()
+const realtime = useRealtime()
 
 const watermark = reactive<WatermarkConfig>({
   enabled: false, text: '', opacity: 0.12, color: '#909399',
@@ -74,6 +78,7 @@ const roleText = computed(() => {
 })
 
 function logout() {
+  realtime.disconnect()
   auth.logout()
   router.push('/login')
 }

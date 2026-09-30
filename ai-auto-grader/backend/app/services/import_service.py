@@ -38,6 +38,7 @@ from app.utils.file_storage import (
     save_upload_to,
 )
 from app.services.template_service import PAPER_SIZES
+from app.services import notification_service, realtime
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -356,6 +357,7 @@ def process_batch(batch_id: str | UUID) -> None:
                 logger.exception("处理文件失败: %s", exc)
                 batch.message = f"部分文件处理失败: {exc}"
             db.commit()
+            _publish_progress(db, batch, exam)
 
         batch.status = "completed"
         batch.completed_at = datetime.now(timezone.utc)
@@ -371,6 +373,9 @@ def process_batch(batch_id: str | UUID) -> None:
         except Exception as exc:  # noqa: BLE001
             logger.exception("选择题自动判分失败 exam=%s: %s", batch.exam_id, exc)
             db.rollback()
+
+        _publish_progress(db, batch, exam)
+        _emit_import_finished(db, batch, exam)
     except Exception as exc:  # noqa: BLE001
         logger.exception("批次处理失败: %s", exc)
         db.rollback()
@@ -826,6 +831,23 @@ def get_progress(db: Session, batch: ImportBatch) -> dict:
         "exception_count": pending_exceptions,
         "message": batch.message,
     }
+
+
+def _publish_progress(db: Session, batch: ImportBatch, exam: Exam) -> None:
+    """实时推送批次导入进度（订阅 exam:<id> 与 exams 的客户端可即时刷新）。"""
+    realtime.publish_exam_event(exam.id, "import_progress", get_progress(db, batch))
+
+
+def _emit_import_finished(db: Session, batch: ImportBatch, exam: Exam) -> None:
+    """导入完成后投递站内通知（是否投递由系统通知配置决定）。"""
+    notification_service.emit_event(
+        "import_finished",
+        content=f"考试「{exam.name}」答卷导入完成，共处理 {batch.processed_pages} 页",
+        link=f"/imports?exam_id={exam.id}",
+        recipient_roles=["exam_admin", "group_leader"],
+        meta={"exam_id": str(exam.id), "batch_id": str(batch.id)},
+        db=db,
+    )
 
 
 def delete_batch_files(batch: ImportBatch) -> None:

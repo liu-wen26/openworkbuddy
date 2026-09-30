@@ -3,6 +3,9 @@
     <div class="toolbar">
       <h2>阅卷进度监控</h2>
       <div class="toolbar-right">
+        <el-tag :type="connected ? 'success' : 'info'" size="small" effect="plain">
+          {{ connected ? '实时已连接' : '实时未连接' }}
+        </el-tag>
         <el-select v-model="statusFilter" clearable placeholder="全部状态" style="width: 160px" @change="load">
           <el-option v-for="s in statusOptions" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
@@ -120,8 +123,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { listMonitorExams, getMonitorExam, type ExamProgressSummary, type ExamProgressDetail } from '@/api/system'
+import { useRealtime } from '@/composables/useRealtime'
+
+const { connected, subscribe, unsubscribe, on } = useRealtime()
 
 const summaries = ref<ExamProgressSummary[]>([])
 const loading = ref(false)
@@ -186,7 +192,39 @@ async function openDetail(examId: string) {
   detailVisible.value = true
 }
 
-onMounted(load)
+const stops: Array<() => void> = []
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 实时事件到达时合并刷新，避免频繁请求。 */
+function scheduleReload() {
+  if (refreshTimer) return
+  refreshTimer = setTimeout(async () => {
+    refreshTimer = null
+    await load()
+    if (detailVisible.value && detail.value) {
+      try {
+        const res = await getMonitorExam(detail.value.exam_id)
+        detail.value = res.data
+      } catch {
+        // 详情刷新失败时静默
+      }
+    }
+  }, 800)
+}
+
+onMounted(() => {
+  subscribe('exams')
+  ;['import_progress', 'choice_graded', 'grading_progress'].forEach((type) => {
+    stops.push(on(type, scheduleReload))
+  })
+  load()
+})
+
+onUnmounted(() => {
+  stops.forEach((stop) => stop())
+  if (refreshTimer) clearTimeout(refreshTimer)
+  unsubscribe('exams')
+})
 </script>
 
 <style scoped>

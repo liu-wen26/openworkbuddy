@@ -25,6 +25,7 @@ from app.models.exception import ExamException
 from app.models.imported_page import ImportedPage
 from app.models.template import AnswerCardTemplate
 from app.models.template_config import ChoiceAnswer, TemplateRegion
+from app.services import notification_service, realtime
 from app.services.template_service import PAPER_SIZES
 from app.utils import image as image_utils
 from app.utils import omr
@@ -104,6 +105,18 @@ def grade_exam_choices(db: Session, exam_id: UUID, only_block_ids: Optional[List
         stats["exception" if result.status == "exception" else "scored"] += 1
 
     db.commit()
+
+    # 实时刷新考试进度；出现新异常时提醒教务/教研及时复核
+    realtime.publish_exam_event(exam_id, "choice_graded", {"stats": stats})
+    if stats["exception"]:
+        notification_service.emit_event(
+            "exception_created",
+            content=f"选择题自动判分产生 {stats['exception']} 条待复核异常",
+            link="/exceptions",
+            recipient_roles=["exam_admin", "group_leader"],
+            meta={"exam_id": str(exam_id), "exception_count": stats["exception"]},
+            db=db,
+        )
     return stats
 
 
@@ -305,6 +318,7 @@ def review_choice_result(
 
     db.commit()
     db.refresh(result)
+    realtime.publish_exam_event(result.exam_id, "choice_graded", {"reviewed_result_id": str(result.id)})
     return result
 
 

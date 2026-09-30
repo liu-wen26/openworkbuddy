@@ -27,7 +27,7 @@ from app.models.student import Student
 from app.models.subjective_result import GradingLog, SubjectiveResult
 from app.models.template import AnswerCardTemplate
 from app.models.template_config import AIScoringConfig, TemplateRegion
-from app.services import ai_service
+from app.services import ai_service, notification_service, realtime
 from app.utils.file_storage import absolute_path
 
 logger = logging.getLogger(__name__)
@@ -111,6 +111,19 @@ def distribute(
          note=f"阅卷模式设为 {mode}" + (f"，题号 {', '.join(sorted(wanted))}" if wanted else ""),
          detail={"mode": mode, "assign_to": str(assign_to) if assign_to else None, "count": touched})
     db.commit()
+
+    # 实时刷新阅卷进度；若指定了阅卷人，则给其推送任务分配通知
+    realtime.publish_exam_event(exam_id, "grading_progress", progress(db, exam_id))
+    if assign_to and touched:
+        notification_service.emit_event(
+            "grading_assigned",
+            content=f"您有 {touched} 条非选择题阅卷任务待处理",
+            link=f"/grading?exam_id={exam_id}",
+            recipient_ids=[assign_to],
+            meta={"exam_id": str(exam_id), "count": touched, "mode": mode},
+            actor_id=user_id,
+            db=db,
+        )
     return {"mode": mode, "assigned": touched}
 
 
@@ -180,6 +193,7 @@ def run_ai_scoring(db: Session, exam_id: UUID, only_block_ids: Optional[List[UUI
              detail={"model": ai_result.model, "low_confidence": low})
 
     db.commit()
+    realtime.publish_exam_event(exam_id, "grading_progress", progress(db, exam_id))
     return stats
 
 
@@ -302,6 +316,19 @@ def save_grade(
 
     db.commit()
     db.refresh(result)
+
+    # 实时刷新阅卷进度；进入仲裁时提醒教务/教研处理
+    realtime.publish_exam_event(result.exam_id, "grading_progress", progress(db, result.exam_id))
+    if result.status == "arbitrating":
+        notification_service.emit_event(
+            "arbitration_required",
+            content=f"第 {result.question_number or '-'} 题双评差值超限，需要仲裁",
+            link=f"/grading?exam_id={result.exam_id}&tab=arbitration",
+            recipient_roles=["exam_admin", "group_leader"],
+            meta={"exam_id": str(result.exam_id), "result_id": str(result.id), "question_number": result.question_number},
+            actor_id=user_id,
+            db=db,
+        )
     return result
 
 
@@ -340,6 +367,7 @@ def arbitrate(
          detail={"first_score": float(result.first_score or 0), "second_score": float(result.second_score or 0)})
     db.commit()
     db.refresh(result)
+    realtime.publish_exam_event(result.exam_id, "grading_progress", progress(db, result.exam_id))
     return result
 
 

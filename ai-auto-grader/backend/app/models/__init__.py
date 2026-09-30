@@ -13,6 +13,7 @@ from app.models.precheck import PrecheckSession, PrecheckPage
 from app.models.system_setting import SystemSetting, RolePermission
 from app.models.audit_log import AuditLog
 from app.models.exam_archive import ExamArchive
+from app.models.notification import Notification
 
 __all__ = [
     "User",
@@ -37,4 +38,5 @@ __all__ = [
     "RolePermission",
     "AuditLog",
     "ExamArchive",
+    "Notification",
 ]

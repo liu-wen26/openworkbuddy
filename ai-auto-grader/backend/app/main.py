@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -9,14 +11,20 @@ from app.db.base import Base, engine
 from app import models  # noqa: F401  确保所有模型注册到 Base.metadata
 from app.api.v1 import (
     auth, users, exams, templates, imports, choices, grading, precheck, analytics,
-    system, exports, archives,
+    system, exports, archives, notifications, ws,
 )
+from app.services import realtime
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    # 绑定主事件循环，供同步业务代码广播实时事件；Celery 模式下额外启动 Redis 中继
+    realtime.bind_loop(asyncio.get_running_loop())
+    relay_task = realtime.start_redis_relay()
     yield
+    if relay_task:
+        relay_task.cancel()
 
 
 settings = get_settings()
@@ -48,6 +56,8 @@ app.include_router(analytics.router, prefix=settings.API_V1_PREFIX)
 app.include_router(system.router, prefix=settings.API_V1_PREFIX)
 app.include_router(exports.router, prefix=settings.API_V1_PREFIX)
 app.include_router(archives.router, prefix=settings.API_V1_PREFIX)
+app.include_router(notifications.router, prefix=settings.API_V1_PREFIX)
+app.include_router(ws.router, prefix=settings.API_V1_PREFIX)
 
 
 @app.middleware("http")
