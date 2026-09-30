@@ -738,3 +738,30 @@ def list_students(db: Session, exam_id: UUID) -> List[dict]:
         }
         for es, st in data["roster"]
     ]
+
+
+def scoreboard(db: Session, exam_id: UUID) -> Dict[UUID, dict]:
+    """按学生实时汇总总分与年级/班级排名，供成绩单、导出等场景复用。"""
+    data = _collect(db, exam_id)
+    totals = _student_totals(data)
+    roster_map = {es.student_id: st for es, st in data["roster"]}
+    ranked = sorted(totals.items(), key=lambda kv: kv[1]["total"], reverse=True)
+
+    board: Dict[UUID, dict] = {}
+    class_members: Dict[str, List[UUID]] = defaultdict(list)
+    for idx, (sid, bucket) in enumerate(ranked):
+        student = roster_map.get(sid)
+        class_name = (student.class_name if student else None) or "未分班"
+        board[sid] = {
+            "total": bucket["total"],
+            "rank_in_grade": idx + 1,
+            "grade_student_count": len(ranked),
+            "class_name": class_name,
+        }
+        class_members[class_name].append(sid)
+
+    for members in class_members.values():
+        for idx, sid in enumerate(members):
+            board[sid]["rank_in_class"] = idx + 1
+            board[sid]["class_student_count"] = len(members)
+    return board

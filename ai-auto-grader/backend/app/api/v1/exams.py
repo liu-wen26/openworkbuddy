@@ -22,6 +22,7 @@ from app.schemas.exam import (
 )
 from app.schemas.student import StudentImportResult, ExamStudentOut
 from app.schemas.user import UserOut
+from app.services import analytics_service
 from app.utils.file_storage import save_original_paper, delete_original_paper
 from app.core.config import get_settings
 
@@ -294,8 +295,10 @@ def list_exam_students(
         .filter(ExamStudent.exam_id == exam_id)
         .all()
     )
+    board = analytics_service.scoreboard(db, exam_id)
     result = []
     for es, s in rows:
+        board_row = board.get(s.id, {})
         result.append(ExamStudentOut(
             id=es.id,
             exam_id=es.exam_id,
@@ -304,9 +307,9 @@ def list_exam_students(
             name=s.name,
             class_name=s.class_name,
             is_absent=es.is_absent,
-            total_score=float(es.total_score) if es.total_score else None,
-            rank_in_grade=es.rank_in_grade,
-            rank_in_class=es.rank_in_class,
+            total_score=board_row.get("total") if s.id in board else None,
+            rank_in_grade=board_row.get("rank_in_grade"),
+            rank_in_class=board_row.get("rank_in_class"),
         ))
     return result
 
