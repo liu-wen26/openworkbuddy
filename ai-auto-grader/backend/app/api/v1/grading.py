@@ -40,11 +40,12 @@ def distribute(
 @router.post("/ai-score", response_model=GradingAIScoreOut)
 def ai_score(
     exam_id: UUID = Query(...),
+    force: bool = Query(default=False, description="为 true 时对已预评题目覆盖重跑"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("scoring:ai")),
 ):
-    """对非选择题执行 AI 预评（已人工评分的任务不会被覆盖）。"""
-    return subjective_service.run_ai_scoring(db, exam_id)
+    """对非选择题执行 AI 预评（幂等：已人工评分或已预评的任务默认跳过，可用 force 覆盖重跑）。"""
+    return subjective_service.run_ai_scoring(db, exam_id, force=force)
 
 
 @router.get("/tasks", response_model=List[GradingTaskOut])

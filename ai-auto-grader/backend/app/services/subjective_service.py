@@ -129,8 +129,17 @@ def distribute(
 
 # ---------------- AI 预评引擎 ----------------
 
-def run_ai_scoring(db: Session, exam_id: UUID, only_block_ids: Optional[List[UUID]] = None) -> dict:
-    """对非选择题执行 AI 预评。已人工评分的任务不会被覆盖。"""
+def run_ai_scoring(
+    db: Session,
+    exam_id: UUID,
+    only_block_ids: Optional[List[UUID]] = None,
+    force: bool = False,
+) -> dict:
+    """对非选择题执行 AI 预评。已人工评分的任务不会被覆盖。
+
+    幂等：默认跳过已有人工评分或已存在 AI 预评（ai_score 非空）的结果，
+    避免重复推理浪费算力、影响一致性；需要重跑时传 force=True 覆盖。
+    """
     exam = _get_exam_or_404(db, exam_id)
     results = ensure_results(db, exam_id)
     if only_block_ids:
@@ -144,6 +153,9 @@ def run_ai_scoring(db: Session, exam_id: UUID, only_block_ids: Optional[List[UUI
 
     for result in results:
         if result.first_score is not None or result.status in ("arbitrated",):
+            stats["skipped"] += 1
+            continue
+        if result.ai_score is not None and not force:
             stats["skipped"] += 1
             continue
 

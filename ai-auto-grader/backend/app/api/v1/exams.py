@@ -24,6 +24,7 @@ from app.schemas.exam import (
 from app.schemas.student import StudentImportResult, ExamStudentOut
 from app.schemas.user import UserOut
 from app.services import analytics_service
+from app.services.exam_service import check_exam_modifiable
 from app.utils.file_storage import save_original_paper, delete_original_paper
 from app.core.config import get_settings
 
@@ -40,11 +41,6 @@ def check_exam_exists(db: Session, exam_id: UUID) -> Exam:
     if not exam:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exam not found")
     return exam
-
-
-def check_exam_modifiable(exam: Exam) -> None:
-    if exam.status in ("locked", "archived"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam is locked or archived")
 
 
 @router.post("", response_model=ExamOut)

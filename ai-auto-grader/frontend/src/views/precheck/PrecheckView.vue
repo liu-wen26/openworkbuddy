@@ -62,11 +62,16 @@
       <el-card shadow="never" class="upload-card">
         <template #header>
           <div class="card-header">
-            <span>样卷上传（{{ session.sample_count }} / {{ MAX_SAMPLES }} 份，共 {{ session.page_count }} 页）</span>
+            <span>
+              样卷上传（{{ session.sample_count }} / {{ MAX_SAMPLES }} 份，共 {{ session.page_count }} 页）
+              <el-tag :type="sessionStatusType" size="small" style="margin-left: 8px">
+                {{ sessionStatusText }}
+              </el-tag>
+            </span>
             <div>
               <el-button
                 type="primary"
-                :disabled="!canRun || !uploadFiles.length"
+                :disabled="!canRun || !uploadFiles.length || session.status === 'running'"
                 :loading="uploading"
                 @click="submitUpload"
               >
@@ -74,7 +79,7 @@
               </el-button>
               <el-button
                 type="success"
-                :disabled="!canRun || !session.page_count"
+                :disabled="!canRun || !session.page_count || session.status === 'running'"
                 :loading="running"
                 @click="onRun"
               >
@@ -90,7 +95,7 @@
           :file-list="uploadFiles"
           :on-change="onFileChange"
           :on-remove="onFileRemove"
-          :disabled="session.sample_count >= MAX_SAMPLES"
+          :disabled="session.status === 'running' || session.sample_count >= MAX_SAMPLES"
           accept=".pdf,.jpg,.jpeg,.png,.bmp,.tif,.tiff,.webp"
         >
           <el-icon class="upload-icon"><UploadFilled /></el-icon>
@@ -372,6 +377,15 @@ const canRun = computed(() =>
   ['super_admin', 'exam_admin', 'group_leader'].includes(auth.user?.role || ''),
 )
 
+const sessionStatusText = computed(() => {
+  const map: Record<string, string> = { active: '待运行', running: '运行中', done: '已完成', cleared: '已清空' }
+  return map[session.value?.status || ''] || session.value?.status || ''
+})
+const sessionStatusType = computed(() => {
+  const map: Record<string, string> = { active: 'info', running: 'warning', done: 'success', cleared: 'danger' }
+  return map[session.value?.status || ''] || 'info'
+})
+
 const summary = computed(() => ({
   pages: session.value?.summary?.pages ?? 0,
   cut_blocks: session.value?.summary?.cut_blocks ?? 0,
@@ -442,9 +456,9 @@ async function loadSession() {
   loading.value = true
   try {
     const res = await listPrecheckSessions(examId.value)
-    const active = res.data.find((s) => s.status === 'active')
-    if (active) {
-      await fetchDetail(active.id)
+    const current = res.data.find((s) => ['active', 'running', 'done'].includes(s.status))
+    if (current) {
+      await fetchDetail(current.id)
     }
   } catch (e) {
     ElMessage.error('加载预阅卷会话失败')
@@ -526,12 +540,13 @@ async function onRun() {
 }
 
 async function pollUntilDone() {
-  for (let i = 0; i < 60; i += 1) {
+  for (let i = 0; i < 90; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 1200))
     const res = await getPrecheckSession(sessionId.value)
     session.value = res.data
     const pending = res.data.pages.some((p) => p.status === 'pending')
-    if (!pending) {
+    // 会话状态由 running 变为 done（或页面无 pending）即认为执行结束
+    if (res.data.status !== 'running' && !pending) {
       await loadPageImages(res.data.pages)
       return
     }

@@ -52,6 +52,7 @@ def emit_event(
         if not config.get("enabled", True):
             return 0
         if config.get("events") and event_key not in config["events"]:
+            logger.debug("通知事件未订阅，跳过投递 event=%s（已订阅: %s）", event_key, config["events"])
             return 0
 
         recipients = _resolve_recipients(session, recipient_ids, recipient_roles, actor_id)
@@ -124,6 +125,10 @@ def _resolve_recipients(
     wanted_ids = {_as_uuid(i) for i in (recipient_ids or []) if i}
     wanted_ids.discard(None)
     roles = list(recipient_roles or [])
+    # 按角色投递的业务/监控通知同时纳入超级管理员，避免管理员看不到任何业务通知（HIGH-2）。
+    # 定向分配（仅 recipient_ids）不在此列，仍只发给指定阅卷人。
+    if roles and "super_admin" not in roles:
+        roles.append("super_admin")
 
     query = db.query(User).filter(User.is_active.is_(True))
     users: List[User] = []

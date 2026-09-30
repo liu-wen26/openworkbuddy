@@ -145,6 +145,20 @@ def _rate(part: int, whole: int) -> float:
     return round(part / whole, 4) if whole else 0.0
 
 
+def _competition_rank(items: List[Tuple[UUID, float]]) -> Dict[UUID, int]:
+    """竞赛式并列名次：同分同名次（如 1/1/1/4）。
+
+    items 需按分数降序排列，返回 学生ID -> 名次。
+    """
+    ranks: Dict[UUID, int] = {}
+    for idx, (key, score) in enumerate(items):
+        if idx > 0 and score == items[idx - 1][1]:
+            ranks[key] = ranks[items[idx - 1][0]]
+        else:
+            ranks[key] = idx + 1
+    return ranks
+
+
 def _distribution(values: List[float], total_score: float, bins: int = 10) -> List[dict]:
     """把总分按满分等分为 bins 段，返回每段人数直方图。"""
     total_score = total_score or 100.0
@@ -571,15 +585,17 @@ def student_report(db: Session, exam_id: UUID, student_id: UUID) -> dict:
     totals = _student_totals(data)
     my = totals.get(student_id, {"choice": 0.0, "subjective": 0.0, "total": 0.0, "ungraded": 0})
 
-    # 排名
+    # 排名（同分并列，与成绩单口径一致）
     ranked = sorted(totals.items(), key=lambda kv: kv[1]["total"], reverse=True)
-    rank_grade = next((i + 1 for i, (sid, _) in enumerate(ranked) if sid == student_id), None)
+    grade_ranks = _competition_rank([(sid, b["total"]) for sid, b in ranked])
+    rank_grade = grade_ranks.get(student_id)
     my_class = student.class_name or "未分班"
     class_ranked = [
         (sid, b) for sid, b in ranked
         if (roster_map.get(sid).class_name if roster_map.get(sid) else None) == my_class
     ]
-    rank_class = next((i + 1 for i, (sid, _) in enumerate(class_ranked) if sid == student_id), None)
+    class_ranks = _competition_rank([(sid, b["total"]) for sid, b in class_ranked])
+    rank_class = class_ranks.get(student_id)
 
     # 逐题明细
     qmeta = _question_meta(data)
@@ -741,27 +757,33 @@ def list_students(db: Session, exam_id: UUID) -> List[dict]:
 
 
 def scoreboard(db: Session, exam_id: UUID) -> Dict[UUID, dict]:
-    """按学生实时汇总总分与年级/班级排名，供成绩单、导出等场景复用。"""
+    """按学生实时汇总总分与年级/班级排名，供成绩单、导出等场景复用。
+
+    同分采用并列名次（竞赛式，如 1/1/1/4）。
+    """
     data = _collect(db, exam_id)
     totals = _student_totals(data)
     roster_map = {es.student_id: st for es, st in data["roster"]}
     ranked = sorted(totals.items(), key=lambda kv: kv[1]["total"], reverse=True)
+    grade_ranks = _competition_rank([(sid, bucket["total"]) for sid, bucket in ranked])
 
     board: Dict[UUID, dict] = {}
     class_members: Dict[str, List[UUID]] = defaultdict(list)
-    for idx, (sid, bucket) in enumerate(ranked):
+    for sid, bucket in ranked:
         student = roster_map.get(sid)
         class_name = (student.class_name if student else None) or "未分班"
         board[sid] = {
             "total": bucket["total"],
-            "rank_in_grade": idx + 1,
+            "rank_in_grade": grade_ranks[sid],
             "grade_student_count": len(ranked),
             "class_name": class_name,
         }
         class_members[class_name].append(sid)
 
     for members in class_members.values():
-        for idx, sid in enumerate(members):
-            board[sid]["rank_in_class"] = idx + 1
+        # members 已按年级分数降序排列，直接做并列名次
+        class_ranks = _competition_rank([(sid, board[sid]["total"]) for sid in members])
+        for sid in members:
+            board[sid]["rank_in_class"] = class_ranks[sid]
             board[sid]["class_student_count"] = len(members)
     return board

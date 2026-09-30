@@ -29,6 +29,7 @@ from app.models.template import AnswerCardTemplate
 from app.models.template_config import AIScoringConfig, ChoiceAnswer, TemplateRegion
 from app.services import ai_service
 from app.services.choice_service import _choice_grid
+from app.services.exam_service import check_exam_modifiable
 from app.services.import_service import _exam_number_grid, _render_pdf_page
 from app.utils import image as image_utils
 from app.utils import omr
@@ -39,6 +40,9 @@ settings = get_settings()
 
 MAX_SAMPLES = 20
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+# 会话生命周期：active（可上传/可运行）-> running（执行中）-> done（已运行，可再上传/重跑）；cleared（已清空）
+REUSABLE_STATUSES = ("active", "running", "done")
+RUNNABLE_STATUSES = ("active", "done")
 
 
 # ---------------- 会话管理 ----------------
@@ -60,12 +64,13 @@ def get_session_or_404(db: Session, session_id: UUID) -> PrecheckSession:
 def open_session(db: Session, exam_id: UUID, user_id: UUID) -> PrecheckSession:
     """打开（或复用）该考试的活跃预阅卷会话。"""
     exam = get_exam_or_404(db, exam_id)
+    check_exam_modifiable(exam)
     if not exam.answer_card_template_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该考试尚未绑定答题卡模板")
 
     existing = (
         db.query(PrecheckSession)
-        .filter(PrecheckSession.exam_id == exam_id, PrecheckSession.status == "active")
+        .filter(PrecheckSession.exam_id == exam_id, PrecheckSession.status.in_(REUSABLE_STATUSES))
         .order_by(PrecheckSession.created_at.desc())
         .first()
     )
@@ -92,8 +97,12 @@ def list_sessions(db: Session, exam_id: UUID) -> List[PrecheckSession]:
 
 def save_samples(db: Session, session: PrecheckSession, files: List[UploadFile]) -> Tuple[int, List[PrecheckPage]]:
     """保存样卷文件（最多 20 份），登记样卷页，返回 (新增份数, 新增页)。"""
-    if session.status != "active":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该会话已清空，请重新创建")
+    check_exam_modifiable(get_exam_or_404(db, session.exam_id))
+    if session.status not in RUNNABLE_STATUSES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该会话正在执行或已清空，请稍后再试")
+    # 已运行过的会话再次上传样卷时回到可编辑状态
+    if session.status == "done":
+        session.status = "active"
 
     source_dir = _precheck_dir(session, "source")
     template = _get_template(db, session.exam_id)
@@ -174,14 +183,20 @@ def run_precheck(session_id: str | UUID) -> None:
         if not session:
             logger.error("预阅卷会话不存在: %s", session_id)
             return
-        if session.status != "active":
-            logger.info("预阅卷会话 %s 非活跃状态，跳过", session_id)
+        if session.status not in RUNNABLE_STATUSES:
+            logger.info("预阅卷会话 %s 当前状态 %s，跳过", session_id, session.status)
             return
+
+        # 标记执行中，前端据此展示「运行中」
+        session.status = "running"
+        session.message = None
+        db.commit()
 
         exam = db.query(Exam).filter(Exam.id == session.exam_id).first()
         template = _get_template(db, session.exam_id)
         if not exam or not template:
             session.message = "考试未绑定答题卡模板"
+            session.status = "active"
             db.commit()
             return
 
@@ -216,6 +231,7 @@ def run_precheck(session_id: str | UUID) -> None:
 
         session.page_count = len(pages)
         session.summary = summary
+        session.status = "done"
         db.commit()
     except Exception as exc:  # noqa: BLE001
         logger.exception("预阅卷处理失败: %s", exc)
@@ -223,6 +239,7 @@ def run_precheck(session_id: str | UUID) -> None:
         session = db.query(PrecheckSession).filter(PrecheckSession.id == _as_uuid(session_id)).first()
         if session:
             session.message = f"预阅卷处理失败: {exc}"
+            session.status = "done"
             db.commit()
     finally:
         db.close()

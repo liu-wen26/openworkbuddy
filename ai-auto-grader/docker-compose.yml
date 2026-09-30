@@ -28,6 +28,8 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       SECRET_KEY: change-me-in-production
       STORAGE_ROOT: /app/storage
+      # 生产环境交由 Celery 分布式队列处理大批量导入/预阅卷，避免占用 Web 进程
+      USE_CELERY: "true"
     volumes:
       - ./storage:/app/storage
     ports:
@@ -48,6 +50,7 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       SECRET_KEY: change-me-in-production
       STORAGE_ROOT: /app/storage
+      USE_CELERY: "true"
     volumes:
       - ./storage:/app/storage
     depends_on:

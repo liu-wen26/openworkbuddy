@@ -206,7 +206,17 @@ def get_notification(db: Optional[Session] = None) -> Dict[str, Any]:
 
 
 def set_notification(db: Session, value: Dict[str, Any], user_id: Optional[UUID]) -> Dict[str, Any]:
-    merged = {**get_notification(db), **{k: v for k, v in value.items() if v is not None}}
+    updates = {k: v for k, v in value.items() if v is not None}
+    current = get_notification(db)
+    # 事件订阅采用「默认 ∪ 已存 ∪ 传入」并集：避免部分更新把默认订阅整表覆盖/清空，
+    # 导致通知闭环被静默关闭（HIGH-2）。
+    incoming = updates.pop("events", None)
+    events: List[str] = []
+    for source in (NOTIFICATION_DEFAULT["events"], current.get("events"), incoming):
+        for event in source or []:
+            if event not in events:
+                events.append(event)
+    merged = {**current, **updates, "events": events}
     set_setting(db, KEY_NOTIFICATION, merged, user_id)
     return merged
 

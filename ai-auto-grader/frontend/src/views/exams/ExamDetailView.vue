@@ -68,6 +68,24 @@
           <el-table-column prop="exam_number" label="考号" />
           <el-table-column prop="name" label="姓名" />
           <el-table-column prop="class_name" label="班级" />
+          <el-table-column label="总分" width="100">
+            <template #default="{ row }">
+              <span v-if="row.total_score != null">{{ row.total_score }}</span>
+              <span v-else style="color: #c0c4cc;">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="年级排名" width="100">
+            <template #default="{ row }">
+              <span v-if="row.rank_in_grade != null">{{ row.rank_in_grade }}</span>
+              <span v-else style="color: #c0c4cc;">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="班级排名" width="100">
+            <template #default="{ row }">
+              <span v-if="row.rank_in_class != null">{{ row.rank_in_class }}</span>
+              <span v-else style="color: #c0c4cc;">—</span>
+            </template>
+          </el-table-column>
           <el-table-column prop="is_absent" label="缺考" width="80">
             <template #default="{ row }">
               <el-tag :type="row.is_absent ? 'danger' : 'success'">{{ row.is_absent ? '是' : '否' }}</el-tag>

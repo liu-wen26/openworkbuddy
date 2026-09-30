@@ -83,8 +83,8 @@ export interface ExamExceptionItem {
 }
 
 export const EXCEPTION_TYPE_LABELS: Record<string, string> = {
-  exam_number_not_found: '考号识别失败',
-  exam_number_not_match: '考号不在花名册',
+  exam_number_not_found: '考号未识别（请检查填涂或手动输入）',
+  exam_number_not_match: '考号不在花名册（请确认考生信息）',
   tilt_exceed: '倾斜超限',
   perspective_exceed: '透视矫正超限',
   cut_failed: '题块切割失败',

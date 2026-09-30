@@ -38,6 +38,7 @@ from app.utils.file_storage import (
     save_upload_to,
 )
 from app.services.template_service import PAPER_SIZES
+from app.services.exam_service import check_exam_modifiable
 from app.services import notification_service, realtime
 
 logger = logging.getLogger(__name__)
@@ -72,10 +73,18 @@ def get_batch_or_404(db: Session, batch_id: UUID) -> ImportBatch:
     return batch
 
 
+def check_batch_exam_modifiable(db: Session, batch: ImportBatch) -> Exam:
+    """锁定/归档考试禁止继续写入答卷（与花名册导入口径一致）。"""
+    exam = get_exam_or_404(db, batch.exam_id)
+    check_exam_modifiable(exam)
+    return exam
+
+
 def create_batch(
     db: Session, exam_id: UUID, import_type: str, source: str, user_id: UUID
 ) -> ImportBatch:
     exam = get_exam_or_404(db, exam_id)
+    check_exam_modifiable(exam)
     if import_type not in ("pdf", "image"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="导入方式仅支持 pdf / image")
     if not exam.answer_card_template_id:
@@ -96,6 +105,7 @@ def create_batch(
 
 def save_files(db: Session, batch: ImportBatch, files: List[UploadFile]) -> List[ImportedPage]:
     """保存上传的 PDF / 图片 / zip 图片包，并登记答卷页。"""
+    check_batch_exam_modifiable(db, batch)
     source_sub = "source_pdfs" if batch.import_type == "pdf" else "source_images"
     source_dir = get_batch_dir(batch.exam_id, batch.id, source_sub)
 
@@ -218,6 +228,7 @@ def init_chunk_upload(
     db: Session, batch: ImportBatch, filename: str, total_size: int, chunk_size: Optional[int] = None
 ) -> dict:
     """创建分片上传会话，返回分片参数与已接收分片列表（用于断点续传）。"""
+    check_batch_exam_modifiable(db, batch)
     _validate_filename(batch, filename)
     size = int(chunk_size) if chunk_size else DEFAULT_CHUNK_SIZE
     size = max(256 * 1024, min(size, 32 * 1024 * 1024))
@@ -265,6 +276,7 @@ def save_chunk(batch: ImportBatch, upload_id: str, index: int, data: bytes) -> d
 
 def complete_chunk_upload(db: Session, batch: ImportBatch, upload_id: str) -> dict:
     """校验分片完整性，合并落盘并登记答卷页。"""
+    check_batch_exam_modifiable(db, batch)
     state = chunk_upload_status(batch, upload_id)
     if not state["completed"]:
         missing = state["total_chunks"] - len(state["received"])

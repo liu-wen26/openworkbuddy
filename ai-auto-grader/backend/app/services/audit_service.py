@@ -46,6 +46,7 @@ def record(
     *,
     action: str,
     user: Optional[User] = None,
+    username: Optional[str] = None,
     method: Optional[str] = None,
     path: Optional[str] = None,
     resource_type: Optional[str] = None,
@@ -56,7 +57,7 @@ def record(
 ) -> AuditLog:
     log = AuditLog(
         user_id=user.id if user else None,
-        username=user.username if user else None,
+        username=user.username if user else username,
         role=user.role if user else None,
         action=action,
         method=method,
@@ -78,10 +79,14 @@ def record_action(
     resource_type: Optional[str] = None,
     detail: Optional[Dict[str, Any]] = None,
     commit: bool = True,
+    username: Optional[str] = None,
 ) -> None:
-    """登记关键业务动作（导出/归档/权限变更等）。"""
+    """登记关键业务动作（导出/归档/权限变更/登录等）。
+
+    无 user 对象时（如登录失败）可通过 username 记录尝试的用户名。
+    """
     try:
-        record(db, action=action, user=user, resource_type=resource_type, detail=detail)
+        record(db, action=action, user=user, username=username, resource_type=resource_type, detail=detail)
         if commit:
             db.commit()
     except Exception as exc:  # noqa: BLE001  审计失败不应阻断主流程

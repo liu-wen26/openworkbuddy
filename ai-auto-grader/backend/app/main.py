@@ -65,7 +65,12 @@ async def audit_middleware(request, call_next):
     """F9-03：对 API 写操作统一记录审计日志（失败不阻断请求）。"""
     response = await call_next(request)
     try:
-        if request.url.path.startswith(settings.API_V1_PREFIX) and request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        if (
+            request.url.path.startswith(settings.API_V1_PREFIX)
+            and request.method in ("POST", "PUT", "PATCH", "DELETE")
+            # 登录由 auth 端点显式记录（含用户归属），中间件避免重复且无归属的记录
+            and request.url.path != f"{settings.API_V1_PREFIX}/auth/login"
+        ):
             from app.services import audit_service
 
             user_id = None

@@ -87,8 +87,8 @@ def run_session(
 ):
     """执行预阅卷流水线（异步，前端轮询详情获取进度）。"""
     session = precheck_service.get_session_or_404(db, session_id)
-    if session.status != "active":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该会话已清空，请重新创建")
+    if session.status not in precheck_service.RUNNABLE_STATUSES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该会话正在执行或已清空，请稍后再试")
     dispatch_precheck(session.id, background_tasks)
     db.refresh(session)
     return session
