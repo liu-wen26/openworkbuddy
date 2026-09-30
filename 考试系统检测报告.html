@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 自动阅卷系统 · 全流程检测报告</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#ffffff; --ink:#1f2329; --sub:#646a73; --line:#e5e6eb;
+    --brand:#2b5cff; --ok:#1fa971; --warn:#e6a23c; --danger:#e34d59; --info:#5c6b7a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+       line-height:1.65;font-size:15px}
+  .wrap{max-width:980px;margin:0 auto;padding:40px 24px 80px}
+  header.rpt{background:linear-gradient(135deg,#2b5cff,#6b8bff);border-radius:16px;color:#fff;padding:34px 36px;
+             box-shadow:0 10px 30px rgba(43,92,255,.25)}
+  header.rpt h1{margin:0 0 8px;font-size:26px;letter-spacing:.5px}
+  header.rpt .meta{opacity:.92;font-size:14px}
+  header.rpt .meta span{margin-right:18px;white-space:nowrap}
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin:24px 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+  .card .num{font-size:28px;font-weight:700;letter-spacing:.5px}
+  .card .lbl{color:var(--sub);font-size:13px;margin-top:2px}
+  .card.ok .num{color:var(--ok)} .card.brand .num{color:var(--brand)}
+  .card.warn .num{color:var(--warn)} .card.danger .num{color:var(--danger)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px 26px;margin:18px 0}
+  h2{font-size:19px;margin:0 0 16px;padding-left:12px;border-left:4px solid var(--brand)}
+  h3{font-size:15px;margin:20px 0 8px;color:var(--ink)}
+  p{margin:8px 0}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:#f7f8fa;color:var(--sub);font-weight:600}
+  tr:nth-child(even) td{background:#fcfcfd}
+  .tag{display:inline-block;font-size:12px;padding:1px 9px;border-radius:20px;color:#fff;white-space:nowrap}
+  .t-ok{background:var(--ok)} .t-fix{background:var(--brand)} .t-high{background:var(--danger)}
+  .t-mid{background:var(--warn)} .t-low{background:var(--info)}
+  .finding{border:1px solid var(--line);border-left-width:4px;border-radius:10px;padding:14px 18px;margin:14px 0}
+  .finding.high{border-left-color:var(--danger)} .finding.mid{border-left-color:var(--warn)}
+  .finding.low{border-left-color:var(--info)} .finding.fix{border-left-color:var(--brand)}
+  .finding h4{margin:0 0 6px;font-size:15px}
+  .finding .ev{color:var(--sub);font-size:13.5px;margin:6px 0}
+  .finding .ev code{background:#f2f3f5;border-radius:5px;padding:1px 6px;font-size:12.5px;color:#3a3f47}
+  .sug{background:#f6f9ff;border:1px dashed #c7d6ff;border-radius:8px;padding:8px 12px;margin-top:8px;font-size:13.5px}
+  ul{margin:8px 0 8px 4px;padding-left:20px}
+  li{margin:4px 0}
+  .foot{color:var(--sub);font-size:13px;text-align:center;margin-top:26px}
+  .kbd{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;background:#f2f3f5;border-radius:5px;padding:1px 6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="rpt">
+    <h1>AI 自动阅卷系统 · 全流程检测报告</h1>
+    <div class="meta">
+      <span>范围：初一七科（语数英政史地生）全流程 + 边界/异常场景</span>
+      <span>日期：2026-09-30</span>
+      <span>方式：端到端自动化（FastAPI TestClient，内联后台任务）</span>
+    </div>
+  </header>
+
+  <div class="cards">
+    <div class="card brand"><div class="num">10</div><div class="lbl">主流程环节全部通过</div></div>
+    <div class="card ok"><div class="num">7</div><div class="lbl">科目 · 每科 8 份答卷</div></div>
+    <div class="card warn"><div class="num">3</div><div class="lbl">本轮已修复问题</div></div>
+    <div class="card danger"><div class="num">9</div><div class="lbl">待改进项（2 高 / 4 中 / 3 低）</div></div>
+  </div>
+
+  <section>
+    <h2>一、检测结论</h2>
+    <p>系统主链路完整可用：从答题卡模板、答卷上传切割、OMR 判分、异常复核、非选择题双评/仲裁/AI 预评，到成绩汇总、学情分析与导出归档，<b>七科全流程均可闭环跑通</b>（单次约 31s）。识别与判分准确：考号识别 8/8、花名册匹配 8/8，构造的漏涂/多涂异常被正确标记。</p>
+    <p>本轮共发现 <b>3 处已修复问题</b> 与 <b>9 处待改进项</b>，其中 2 项为高优先级一致性/闭环缺口（锁定归档后可继续导入答卷、通知闭环被配置静默关闭），建议优先处理。</p>
+  </section>
+
+  <section>
+    <h2>二、检测范围与方法</h2>
+    <table>
+      <tr><th style="width:130px">轮次</th><th>覆盖内容</th></tr>
+      <tr>
+        <td>主流程（7 科）</td>
+        <td>四角色登录 → 通用模板（8 区域）与预检 → 七科考试创建 → 花名册导入 → 标准答案 → PDF 答卷生成上传与自动切割 → 考号识别匹配 → 选择题判分与异常复核 → 双评/仲裁、AI 预评、手动评分 → 成绩与学生个人报告 → 学情四类报表 → 成绩/报表导出 → 归档与监控</td>
+      </tr>
+      <tr>
+        <td>边界与未覆盖模块</td>
+        <td>A 权限矩阵 · B 无模板拦截 · C 花名册校验 · D 异常答卷（未匹配考号/空白卷） · E 分片上传 · F 预阅卷预览 · G 评分边界与 AI 幂等 · H 通知与审计 · I 三类导出 · J 锁定/归档拦截</td>
+      </tr>
+    </table>
+    <p class="ev" style="color:#646a73;font-size:13.5px">注：以下结论均来自真实接口调用与数据库核对，未使用真实学生数据；测试脚本与原始日志位于 <span class="kbd">/tmp/e2e_exam.py</span>、<span class="kbd">/tmp/e2e_exam.log</span>、<span class="kbd">/tmp/e2e_edge.py</span>、<span class="kbd">/tmp/e2e_edge.log</span>。</p>
+  </section>
+
+  <section>
+    <h2>三、已验证通过的能力</h2>
+    <table>
+      <tr><th style="width:210px">能力</th><th>验证结果</th></tr>
+      <tr><td>答题卡模板与预检</td><td><span class="tag t-ok">通过</span> 8 区域（考号/姓名/4 选择/2 主观）创建与预检通过</td></tr>
+      <tr><td>答卷上传与自动切割</td><td><span class="tag t-ok">通过</span> PDF 导入、纠斜、区域切割、考号识别匹配 8/8</td></tr>
+      <tr><td>选择题 OMR 判分</td><td><span class="tag t-ok">通过</span> 标准答案比对；漏涂/多涂正确标记为异常</td></tr>
+      <tr><td>非选择题双评 + 仲裁</td><td><span class="tag t-ok">通过</span> 差值超公差自动转仲裁；公差内取平均</td></tr>
+      <tr><td>AI 预评（ai_assist）</td><td><span class="tag t-ok">通过</span> 16 题预评，低置信度单独提示</td></tr>
+      <tr><td>评分合法性校验</td><td><span class="tag t-ok">通过</span> 超满分/负分被拒（0 ~ max_score）</td></tr>
+      <tr><td>成绩与学生报告</td><td><span class="tag t-ok">通过</span> 总分、年级/班级排名、个人报告一致</td></tr>
+      <tr><td>学情四类报表</td><td><span class="tag t-ok">通过</span> 年级总览、班级对比、题目维度、知识点掌握</td></tr>
+      <tr><td>导出</td><td><span class="tag t-ok">通过</span> 成绩明细 xlsx、报表 xlsx/HTML、答卷图片 zip</td></tr>
+      <tr><td>归档 / 恢复</td><td><span class="tag t-ok">通过</span> 状态置 archived 并写入审计；恢复后回退状态</td></tr>
+      <tr><td>分片上传（F4-01）</td><td><span class="tag t-ok">通过</span> 初始化/分片/状态/合并/登记全链路</td></tr>
+      <tr><td>预阅卷预览（F5）</td><td><span class="tag t-ok">通过</span> 会话开/传/跑/清，数据与正式数据隔离</td></tr>
+      <tr><td>权限边界</td><td><span class="tag t-ok">通过</span> 教师禁创建考试/分发/看总览（403）；无令牌 401；可访问本人阅卷队列</td></tr>
+      <tr><td>花名册校验</td><td><span class="tag t-ok">通过</span> 表头错误、考号重复均被拦截并返回明细</td></tr>
+      <tr><td>锁定拦截</td><td><span class="tag t-ok">通过</span> 锁定后禁止导入花名册（<span class="kbd">Exam is locked or archived</span>）</td></tr>
+      <tr><td>审计日志</td><td><span class="tag t-ok">通过</span> 记录成功/失败请求、导出、归档等操作</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>四、本轮已修复</h2>
+
+    <div class="finding fix">
+      <h4><span class="tag t-fix">已修复</span> FIX-1 · 成绩单总分/排名恒为空</h4>
+      <div class="ev">证据：<span class="kbd">GET /exams/{id}/students</span> 返回的 <span class="kbd">total_score / rank_in_grade / rank_in_class</span> 8/8 全为空；个人报告因实时计算正常，两处口径不一致。</div>
+      <div class="ev">原因：接口读取 <span class="kbd">ExamStudent</span> 上从未写入的反规范化字段。</div>
+      <div class="sug">已新增可复用的 <span class="kbd">analytics_service.scoreboard()</span>，按"实时计算"设计统一产出总分与年级/班级排名。修复后 8 名学生总分齐全、年级排名 1–8、班级排名按班独立 1–4，与个人报告一致。</div>
+    </div>
+
+    <div class="finding fix">
+      <h4><span class="tag t-fix">已修复</span> FIX-2 · 总分校验为占位实现</h4>
+      <div class="ev">证据：<span class="kbd">GET /exams/{id}/validate-score</span> 固定返回 <span class="kbd">valid=true, template_total=null</span>，未真正比对。</div>
+      <div class="sug">已实现：汇总模板 choice/subjective 题块 <span class="kbd">max_score</span> 与配置总分比对，返回 <span class="kbd">valid / template_total / difference</span>。验证：60 分→一致；100 分→<span class="kbd">valid=false, difference=40</span>。</div>
+    </div>
+
+    <div class="finding fix">
+      <h4><span class="tag t-fix">已修复</span> FIX-3 · AI 辅助阅卷进度显示为"无进展"</h4>
+      <div class="ev">证据：ai_assist 模式下 16 题全部 AI 预评完成，进度看板 <span class="kbd">完成率=0.0</span>。</div>
+      <div class="sug">已在阅卷进度与监控详情新增 <span class="kbd">ai_scored / ai_pending_review / ai_pending_rate / finished_rate</span> 与逐题 AI 列，前端显示"AI 已预评待复核 N 题（X%）· 含 AI 预评处理进度 Y%"，保留 <span class="kbd">completion_rate</span> 为"已判完"语义。</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>五、待改进项</h2>
+
+    <h3>高优先级</h3>
+
+    <div class="finding high">
+      <h4><span class="tag t-high">高</span> HIGH-1 · 锁定/归档考试仍可导入答卷（一致性缺口）</h4>
+      <div class="ev">证据：考试置 <span class="kbd">locked</span> 后，<span class="kbd">POST /imports/batches</span> 与 <span class="kbd">POST /imports/batches/{id}/files</span> 均返回 <b>200</b>，答卷被接收；归档（archived）后建批次同样 200。对照：花名册导入与考试更新已被正确拦截（400）。</div>
+      <div class="ev">影响：锁定/归档本意是"冻结数据"，却可通过答卷导入通道继续写入，破坏数据一致性，且异常/判分/成绩会随新答卷变化。</div>
+      <div class="sug">建议在 <span class="kbd">import_service.create_batch / save_files / complete_chunk_upload</span> 及预阅卷入口统一调用 <span class="kbd">check_exam_modifiable(exam)</span>，与花名册口径一致。</div>
+    </div>
+
+    <div class="finding high">
+      <h4><span class="tag t-high">高</span> HIGH-2 · 通知闭环被"静默关闭"，且管理员收不到业务通知</h4>
+      <div class="ev">证据：整场考试（含异常、分发、AI 预评、归档）跑完后，站内通知总数为 <b>0</b>。核对系统通知配置发现其已被持久化为仅订阅 <span class="kbd">["grading_completed"]</span>，默认的其它 4 个事件被整表覆盖；<span class="kbd">emit_event</span> 对未订阅事件直接返回 0，且无任何告警。</div>
+      <div class="ev">附加：按角色投递的收件人为 <span class="kbd">exam_admin / group_leader</span>，<b>super_admin 不在任何业务通知的收件人集合中</b>，管理员即使开启也看不到通知。</div>
+      <div class="sug">1) 配置合并建议对 <span class="kbd">events</span> 采用"默认 ∪ 已存"或校验非空，避免部分更新把默认订阅清空；2) 未订阅事件命中时记一条 debug 日志，便于排障；3) 将 <span class="kbd">super_admin</span> 纳入监控类事件收件人。<i>（本次调试已将订阅恢复为全部 5 个事件并验证投递成功：2 类事件各生成 2 条通知。）</i></div>
+    </div>
+
+    <h3>中优先级</h3>
+
+    <div class="finding mid">
+      <h4><span class="tag t-mid">中</span> MID-1 · AI 预评缺少幂等</h4>
+      <div class="ev">证据：连续两次调用 <span class="kbd">POST /grading/ai-score</span> 均返回 <span class="kbd">scored=2</span>，已预评结果被重复推理。代码仅跳过 <span class="kbd">first_score 非空</span>或 <span class="kbd">arbitrated</span> 的结果。</div>
+      <div class="ev">影响：AI 算力/费用浪费；若替换模型重跑会影响一致性，也无"已预评"的稳定标记语义。</div>
+      <div class="sug">对 <span class="kbd">ai_score 已存在且未变更</span>的结果默认跳过，提供 <span class="kbd">force=true</span> 覆盖重跑。</div>
+    </div>
+
+    <div class="finding mid">
+      <h4><span class="tag t-mid">中</span> MID-2 · 大批量导入为内联后台处理</h4>
+      <div class="ev">证据：每科 8 份 PDF 上传+处理约 1.8–2.1s，处理走 <span class="kbd">BackgroundTasks</span> 内联（非 Celery）。</div>
+      <div class="ev">影响：真实年级级规模（数百份/科）会显著拉长请求耗时，并占用 Web 进程。</div>
+      <div class="sug">生产环境按既有设计切换到 Celery 分布式队列，前端改轮询/WS 进度。</div>
+    </div>
+
+    <div class="finding mid">
+      <h4><span class="tag t-mid">中</span> MID-3 · 登录审计无法归属用户</h4>
+      <div class="ev">证据：<span class="kbd">/auth/login</span> 的审计记录 <span class="kbd">user_id / username</span> 为 <span class="kbd">null</span>（登录时尚无身份上下文）。</div>
+      <div class="ev">影响：登录成功/失败无法按用户检索，弱化安全审计能力。</div>
+      <div class="sug">登录成功后在审计中回填登录用户名/ID；失败登录记录尝试的用户名与来源 IP。</div>
+    </div>
+
+    <div class="finding mid">
+      <h4><span class="tag t-mid">中</span> MID-4 · 考号异常类型语义易混</h4>
+      <div class="ev">证据：异常分布同时出现 <span class="kbd">exam_number_not_found</span>（未识别到考号）与 <span class="kbd">exam_number_not_match</span>（识别成功但不在花名册）。</div>
+      <div class="ev">影响：两个近义英文枚举对一线教师不友好，易误判处理动作（"重新填涂" vs "补录学生"）。</div>
+      <div class="sug">前端展示改为明确中文文案，或在异常条目上给出建议处理动作。</div>
+    </div>
+
+    <h3>低优先级 / 观察</h3>
+
+    <div class="finding low">
+      <h4><span class="tag t-low">低</span> LOW-1 · 同分采用顺序名次</h4>
+      <div class="ev">多人同分（如 3 人同为 49.25）时名次为 1/2/3，而非并列同名次。</div>
+      <div class="sug">如需竞赛式排名，可改为同分同名次（1/1/1/4）。</div>
+    </div>
+
+    <div class="finding low">
+      <h4><span class="tag t-low">低</span> LOW-2 · 预阅卷会话状态未体现"已运行"</h4>
+      <div class="ev">样卷执行 <span class="kbd">run</span> 后会话 <span class="kbd">status</span> 仍为 <span class="kbd">active</span>，页面已生成但状态无变化。</div>
+      <div class="sug">可增加 <span class="kbd">running/done</span> 状态或在详情中返回处理进度，便于前端展示。</div>
+    </div>
+
+    <div class="finding low">
+      <h4><span class="tag t-low">低</span> LOW-3 · 成绩单视图未消费总分/排名</h4>
+      <div class="ev">后端 <span class="kbd">/exams/{id}/students</span> 现已返回总分与排名，但考试详情页目前仅用于花名册展示。</div>
+      <div class="sug">可在成绩单表格接入总分/排名列（后端已就绪，纯前端改动）。</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>六、建议处理顺序</h2>
+    <ul>
+      <li><b>第一批（高）</b>：HIGH-1 锁定/归档导入拦截、HIGH-2 通知订阅合并与管理员收件人。</li>
+      <li><b>第二批（中）</b>：MID-1 AI 幂等、MID-3 登录审计归属、MID-4 异常文案；MID-2 视上线规模切换 Celery。</li>
+      <li><b>第三批（低）</b>：名次并列、预阅卷状态、成绩单视图接入。</li>
+    </ul>
+    <p style="color:#646a73;font-size:13.5px">说明：本轮修复涉及后端 <span class="kbd">analytics_service.py / exams.py / subjective_service.py / monitor_service.py / schemas/grading.py</span> 与前端 <span class="kbd">api/grading.ts / api/system.ts / GradingWorkbenchView.vue / MonitorView.vue</span>；前端 <span class="kbd">vue-tsc</span> 类型检查通过，端到端复测问题数 0。</p>
+  </section>
+
+  <div class="foot">AI 自动阅卷系统 · 全流程检测报告 · 自动生成于 2026-09-30</div>
+</div>
+</body>
+</html>
