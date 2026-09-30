@@ -58,12 +58,17 @@ def _subjective_progress(db: Session, exam_id: UUID) -> dict:
         by_status[s] = by_status.get(s, 0) + c
     total = sum(by_status.values())
     done = by_status.get("graded", 0) + by_status.get("arbitrated", 0)
+    ai_scored = by_status.get("ai_scored", 0)
     return {
         "total": total,
         "done": done,
         "arbitrating": by_status.get("arbitrating", 0),
         "by_status": by_status,
         "completion_rate": round(done / total, 4) if total else 0.0,
+        "ai_scored": ai_scored,
+        "ai_pending_review": ai_scored,
+        "ai_pending_rate": round(ai_scored / total, 4) if total else 0.0,
+        "finished_rate": round((done + ai_scored) / total, 4) if total else 0.0,
     }
 
 

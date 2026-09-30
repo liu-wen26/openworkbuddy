@@ -304,12 +304,17 @@
                 </div>
               </div>
             </div>
+            <div v-if="progress.ai_pending_review" class="progress-note">
+              AI 已预评待人工复核 {{ progress.ai_pending_review }} 题（{{ Math.round(progress.ai_pending_rate * 100) }}%）·
+              含 AI 预评的整体处理进度 {{ Math.round(progress.finished_rate * 100) }}%
+            </div>
             <el-table :data="progress.by_question" border style="margin-top: 16px">
               <el-table-column prop="question_number" label="题号" width="80" />
               <el-table-column prop="max_score" label="满分" width="80" />
               <el-table-column label="已评 / 总数" width="120">
                 <template #default="{ row }">{{ row.graded }} / {{ row.total }}</template>
               </el-table-column>
+              <el-table-column label="AI 已评" width="90" prop="ai_scored" />
               <el-table-column label="待仲裁" width="90" prop="arbitrating" />
               <el-table-column label="完成度" min-width="220">
                 <template #default="{ row }">
@@ -496,6 +501,10 @@ const progress = ref<GradingProgress>({
   completion_rate: 0,
   by_status: {},
   by_question: [],
+  ai_scored: 0,
+  ai_pending_review: 0,
+  ai_pending_rate: 0,
+  finished_rate: 0,
 })
 
 const tasks = ref<GradingTask[]>([])
@@ -1151,6 +1160,14 @@ onUnmounted(() => {
 .status-count {
   font-weight: 600;
   color: #303133;
+}
+.progress-note {
+  margin-top: 16px;
+  padding: 8px 12px;
+  background: #f4f6f8;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #606266;
 }
 .arb-scores {
   display: flex;

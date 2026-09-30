@@ -91,6 +91,7 @@ class GradingQuestionProgress(BaseModel):
     total: int
     graded: int
     arbitrating: int
+    ai_scored: int = 0
     max_score: float
 
 
@@ -100,6 +101,10 @@ class GradingProgressOut(BaseModel):
     completion_rate: float
     by_status: Dict[str, int]
     by_question: List[GradingQuestionProgress]
+    ai_scored: int = 0
+    ai_pending_review: int = 0
+    ai_pending_rate: float = 0.0
+    finished_rate: float = 0.0
 
 
 class GradingLogOut(BaseModel):

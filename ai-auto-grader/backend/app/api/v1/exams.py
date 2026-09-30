@@ -1,5 +1,5 @@
 import io
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 from decimal import Decimal
 
@@ -13,6 +13,7 @@ from app.models.user import User
 from app.models.exam import Exam, ExamTeacher
 from app.models.student import Student, ExamStudent
 from app.models.template import AnswerCardTemplate
+from app.models.template_config import TemplateRegion
 from app.schemas.exam import (
     ExamCreate,
     ExamUpdate,
@@ -412,6 +413,26 @@ def validate_total_score(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("exam:view")),
 ):
-    check_exam_exists(db, exam_id)
-    # Placeholder: real validation will compare configured_total with template regions sum
-    return {"valid": True, "configured_total": configured_total, "template_total": None}
+    """F2-05 总分校验：比对考试配置总分与答题卡模板各题块分值合计。"""
+    exam = check_exam_exists(db, exam_id)
+    template_total: Optional[float] = None
+    if exam.answer_card_template_id:
+        rows = (
+            db.query(TemplateRegion.max_score)
+            .filter(
+                TemplateRegion.template_id == exam.answer_card_template_id,
+                TemplateRegion.region_type.in_(("choice", "subjective")),
+            )
+            .all()
+        )
+        if rows:
+            template_total = round(sum(float(r[0] or 0) for r in rows), 2)
+
+    configured = float(configured_total)
+    valid = template_total is None or abs(configured - template_total) < 0.01
+    return {
+        "valid": valid,
+        "configured_total": configured,
+        "template_total": template_total,
+        "difference": round(configured - template_total, 2) if template_total is not None else None,
+    }

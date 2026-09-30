@@ -103,6 +103,10 @@
           <div class="block-meta">
             已完成 {{ detail.subjective.done }}/{{ detail.subjective.total }} · 待仲裁 {{ detail.subjective.arbitrating }}
           </div>
+          <div v-if="detail.subjective.ai_pending_review" class="block-meta ai-note">
+            AI 已预评待复核 {{ detail.subjective.ai_pending_review }} 题 ·
+            含 AI 预评处理进度 {{ pct(detail.subjective.finished_rate) }}
+          </div>
           <div class="status-chips">
             <el-tag v-for="(count, status) in detail.subjective.by_status" :key="status" size="small" type="info">
               {{ subjectiveStatusText(status) }}：{{ count }}
@@ -277,6 +281,9 @@ onUnmounted(() => {
 .block-meta {
   color: #909399;
   font-size: 13px;
+}
+.block-meta.ai-note {
+  color: #e6a23c;
 }
 .status-chips {
   display: flex;

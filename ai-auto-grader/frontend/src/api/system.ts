@@ -157,6 +157,10 @@ export interface ExamProgressDetail {
     arbitrating: number
     by_status: Record<string, number>
     completion_rate: number
+    ai_scored: number
+    ai_pending_review: number
+    ai_pending_rate: number
+    finished_rate: number
   }
   exception: {
     total: number

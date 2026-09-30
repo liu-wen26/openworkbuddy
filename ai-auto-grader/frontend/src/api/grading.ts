@@ -67,8 +67,13 @@ export interface GradingProgress {
     total: number
     graded: number
     arbitrating: number
+    ai_scored: number
     max_score: number
   }[]
+  ai_scored: number
+  ai_pending_review: number
+  ai_pending_rate: number
+  finished_rate: number
 }
 
 export interface GradingLog {

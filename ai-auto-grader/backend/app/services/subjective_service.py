@@ -404,21 +404,30 @@ def progress(db: Session, exam_id: UUID) -> dict:
     for r in results:
         by_status[r.status] = by_status.get(r.status, 0) + 1
         q = r.question_number or "-"
-        group = by_question.setdefault(q, {"question_number": q, "total": 0, "graded": 0, "arbitrating": 0, "max_score": float(r.max_score or 0)})
+        group = by_question.setdefault(q, {"question_number": q, "total": 0, "graded": 0, "arbitrating": 0, "ai_scored": 0, "max_score": float(r.max_score or 0)})
         group["total"] += 1
         if r.status in ("graded", "arbitrated"):
             group["graded"] += 1
         if r.status == "arbitrating":
             group["arbitrating"] += 1
+        if r.status == "ai_scored":
+            group["ai_scored"] += 1
 
     total = len(results)
     done = by_status.get("graded", 0) + by_status.get("arbitrated", 0)
+    ai_scored = by_status.get("ai_scored", 0)
+    # 完成率 = 已判完 / 总数；AI 已预评但尚未人工复核的题单独展示「待复核」比例，
+    # 避免教师误解为「无进展」
     return {
         "total": total,
         "done": done,
         "completion_rate": round(done / total, 4) if total else 0.0,
         "by_status": by_status,
         "by_question": [by_question[q] for q in sorted(by_question)],
+        "ai_scored": ai_scored,
+        "ai_pending_review": ai_scored,
+        "ai_pending_rate": round(ai_scored / total, 4) if total else 0.0,
+        "finished_rate": round((done + ai_scored) / total, 4) if total else 0.0,
     }
 
 
