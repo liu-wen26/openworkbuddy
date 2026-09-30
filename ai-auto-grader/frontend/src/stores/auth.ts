@@ -49,6 +49,15 @@ export const useAuthStore = defineStore('auth', () => {
       base.push({ path: '/choices', title: '选择题判分', icon: 'List' })
       base.push({ path: '/grading', title: '非选择题阅卷', icon: 'EditPen' })
       base.push({ path: '/analytics', title: '学情分析', icon: 'DataAnalysis' })
+      base.push({ path: '/exports', title: '导出中心', icon: 'Download' })
+      base.push({ path: '/archives', title: '考试归档', icon: 'FolderOpened' })
+      base.push({ path: '/monitor', title: '阅卷监控', icon: 'Odometer' })
+    }
+    if (role === 'super_admin') {
+      base.push({ path: '/users', title: '用户与角色', icon: 'UserFilled' })
+      base.push({ path: '/system/settings', title: '系统设置', icon: 'Setting' })
+      base.push({ path: '/system/roles', title: '权限管理', icon: 'Key' })
+      base.push({ path: '/system/audit', title: '审计日志', icon: 'Tickets' })
     }
     if (role === 'group_leader' || role === 'teacher') {
       base.push({ path: '/exams', title: '考试列表', icon: 'Document' })
@@ -60,6 +69,8 @@ export const useAuthStore = defineStore('auth', () => {
       base.push({ path: '/choices', title: '选择题判分', icon: 'List' })
       base.push({ path: '/precheck', title: '预阅卷预览', icon: 'View' })
       base.push({ path: '/analytics', title: '学情分析', icon: 'DataAnalysis' })
+      base.push({ path: '/exports', title: '导出中心', icon: 'Download' })
+      base.push({ path: '/monitor', title: '阅卷监控', icon: 'Odometer' })
     }
     return base
   })

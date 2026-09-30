@@ -27,16 +27,41 @@
         <router-view />
       </el-main>
     </el-container>
+    <div v-if="watermark.enabled" class="global-watermark">
+      <span v-for="i in 120" :key="i" class="wm-text" :style="wmStyle">{{ watermark.text }}</span>
+    </div>
   </el-container>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { getPublicWatermark, type WatermarkConfig } from '@/api/system'
 
 const auth = useAuthStore()
 const router = useRouter()
+
+const watermark = reactive<WatermarkConfig>({
+  enabled: false, text: '', opacity: 0.12, color: '#909399',
+  font_size: 16, rotate: -25, position: 'center',
+})
+
+const wmStyle = computed(() => ({
+  color: watermark.color,
+  opacity: String(watermark.opacity),
+  fontSize: `${watermark.font_size}px`,
+  transform: `rotate(${watermark.rotate}deg)`,
+}))
+
+onMounted(async () => {
+  try {
+    const res = await getPublicWatermark()
+    Object.assign(watermark, res.data)
+  } catch {
+    // 水印为可选功能，获取失败时静默忽略
+  }
+})
 
 const roleText = computed(() => {
   const map: Record<string, string> = {
@@ -88,5 +113,22 @@ function logout() {
 .main {
   background-color: #f0f2f5;
   padding: 20px;
+}
+.global-watermark {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 48px 72px;
+  padding: 40px;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  z-index: 9999;
+}
+.wm-text {
+  font-weight: bold;
+  white-space: nowrap;
 }
 </style>

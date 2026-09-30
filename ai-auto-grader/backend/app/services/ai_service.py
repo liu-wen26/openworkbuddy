@@ -206,16 +206,44 @@ class MockAIProvider(AIServiceProvider):
 # ---------------- 工厂 ----------------
 
 def get_ai_provider() -> AIServiceProvider:
-    provider = (settings.LLM_PROVIDER or "openai").lower()
+    """构建 AI 提供方：优先读取系统设置中的大模型配置，回落到环境变量。"""
+    from app.services import settings_service
+
+    config = settings_service.get_llm_config()
+    if not config.get("enabled", True):
+        logger.info("大模型配置已停用，AI 评分使用启发式兜底")
+        return MockAIProvider()
+
+    provider = (config.get("provider") or settings.LLM_PROVIDER or "openai").lower()
+    model = config.get("model") or settings.LLM_DEFAULT_MODEL
+    base = config.get("api_base") or settings.LLM_API_BASE
+    api_key = config.get("api_key") or settings.LLM_API_KEY
+
     if provider == "mock":
         return MockAIProvider()
     if provider == "local":
-        return LocalModelProvider(settings.LLM_API_BASE, settings.LLM_DEFAULT_MODEL)
-    if settings.LLM_API_KEY:
-        return OpenAICompatibleProvider(
-            settings.LLM_API_BASE or DEFAULT_OPENAI_BASE,
-            settings.LLM_API_KEY,
-            settings.LLM_DEFAULT_MODEL,
-        )
+        return LocalModelProvider(base, model)
+    if api_key:
+        return OpenAICompatibleProvider(base or DEFAULT_OPENAI_BASE, api_key, model)
     logger.warning("未配置 LLM_API_KEY，AI 评分回退到启发式兜底（mock）")
     return MockAIProvider()
+
+
+def check_llm_connection(config: Dict[str, Any]) -> Dict[str, Any]:
+    """校验大模型连通性：对 OpenAI 兼容服务探测 /models 列表。"""
+    provider = (config.get("provider") or "openai").lower()
+    model = config.get("model") or ""
+    if provider == "mock":
+        return {"ok": True, "provider": "mock", "message": "当前为启发式兜底，未接入真实大模型"}
+    base = (config.get("api_base") or (DEFAULT_LOCAL_BASE if provider == "local" else DEFAULT_OPENAI_BASE)).rstrip("/")
+    api_key = config.get("api_key")
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.get(f"{base}/models", headers=headers)
+            resp.raise_for_status()
+        return {"ok": True, "provider": provider, "model": model, "message": f"连接成功（{base}）"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "provider": provider, "model": model, "message": f"连接失败：{exc}"}

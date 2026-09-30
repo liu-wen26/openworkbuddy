@@ -21,9 +21,10 @@ ROLE_PERMISSIONS = {
         "choice:grade", "choice:review", "choice:view",
         "scoring:grade", "scoring:ai", "scoring:distribute", "scoring:arbitrate",
         "scoring:view_all", "scoring:log",
-        "analytics:view", "export:download", "archive:create",
+        "analytics:view", "export:download", "archive:create", "archive:view", "archive:delete",
         "precheck:view", "precheck:upload", "precheck:run", "precheck:clear",
-        "user:list", "user:view", "user:create",
+        "user:list", "user:view", "user:create", "user:update",
+        "monitor:view", "audit:view", "system:view",
     ],
     "group_leader": [
         "exam:list", "exam:view",
@@ -34,8 +35,10 @@ ROLE_PERMISSIONS = {
         "exception:list", "exception:view", "exception:resolve", "exception:ignore",
         "page:preview", "block:recut", "exam_number:manual",
         "choice:grade", "choice:review", "choice:view",
-        "analytics:view", "export:download",
+        "analytics:view", "export:download", "archive:view",
         "precheck:view", "precheck:upload", "precheck:run", "precheck:clear",
+        "monitor:view",
+        "system:view",
     ],
     "teacher": [
         "exam:list", "exam:view",
@@ -62,7 +65,10 @@ def require_permission(permission: str):
         user = db.query(User).filter(User.id == user_id).first()
         if not user or not user.is_active:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User inactive")
-        if not has_permission(user.role, permission):
+        # 延迟导入避免循环依赖：角色权限可能被 system_settings 覆盖
+        from app.services.settings_service import has_permission_db
+
+        if not has_permission_db(db, user.role, permission):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied")
         return user
     return checker

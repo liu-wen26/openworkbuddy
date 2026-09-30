@@ -10,6 +10,9 @@ from app.models.exception import ExamException
 from app.models.choice_result import ChoiceResult
 from app.models.subjective_result import SubjectiveResult, GradingLog
 from app.models.precheck import PrecheckSession, PrecheckPage
+from app.models.system_setting import SystemSetting, RolePermission
+from app.models.audit_log import AuditLog
+from app.models.exam_archive import ExamArchive
 
 __all__ = [
     "User",
@@ -30,4 +33,8 @@ __all__ = [
     "GradingLog",
     "PrecheckSession",
     "PrecheckPage",
+    "SystemSetting",
+    "RolePermission",
+    "AuditLog",
+    "ExamArchive",
 ]

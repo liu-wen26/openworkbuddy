@@ -10,6 +10,18 @@
           </el-option>
         </el-select>
         <el-button :disabled="!examId" @click="openPaper">查看原试卷</el-button>
+        <el-dropdown :disabled="!examId" @command="handleExport">
+          <el-button type="primary" :disabled="!examId">
+            导出<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="grade">成绩明细 Excel</el-dropdown-item>
+              <el-dropdown-item command="report_xlsx">学情报表 Excel</el-dropdown-item>
+              <el-dropdown-item command="report_html">学情报表 HTML</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </div>
 
@@ -466,6 +478,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getExams, type Exam } from '@/api/exams'
+import { exportGradeDetail, exportReport } from '@/api/exports'
 import { getBlockImageUrl } from '@/api/imports'
 import {
   MASTERY_LABELS,
@@ -661,6 +674,23 @@ function closePaper() {
   if (paperUrl.value) {
     URL.revokeObjectURL(paperUrl.value)
     paperUrl.value = ''
+  }
+}
+
+const currentExamName = computed(() => exams.value.find((e) => e.id === examId.value)?.name)
+
+async function handleExport(command: string) {
+  if (!examId.value) return
+  const name = currentExamName.value
+  if (command === 'grade') {
+    await exportGradeDetail(examId.value, name)
+    ElMessage.success('成绩明细已导出')
+  } else if (command === 'report_xlsx') {
+    await exportReport(examId.value, 'xlsx', name)
+    ElMessage.success('学情报表已导出')
+  } else if (command === 'report_html') {
+    await exportReport(examId.value, 'html', name)
+    ElMessage.success('学情报表已导出')
   }
 }
 
