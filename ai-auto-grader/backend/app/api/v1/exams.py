@@ -182,6 +182,25 @@ def download_original_paper(
     )
 
 
+@router.get("/{exam_id}/original-paper/preview")
+def preview_original_paper(
+    exam_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("paper:view")),
+):
+    """原试卷在线预览（inline，供浏览器内嵌查看）。"""
+    from fastapi.responses import FileResponse
+    from pathlib import Path
+
+    exam = check_exam_exists(db, exam_id)
+    if not exam.original_paper_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Original paper not uploaded")
+    full_path = Path(get_settings().STORAGE_ROOT) / exam.original_paper_path
+    if not full_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found on disk")
+    return FileResponse(path=str(full_path), media_type="application/pdf")
+
+
 @router.get("/{exam_id}/original-paper", response_model=ExamOriginalPaperOut)
 def get_original_paper_info(
     exam_id: UUID,

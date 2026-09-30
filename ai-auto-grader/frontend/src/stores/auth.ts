@@ -48,6 +48,7 @@ export const useAuthStore = defineStore('auth', () => {
       base.push({ path: '/exceptions', title: '异常中心', icon: 'Warning' })
       base.push({ path: '/choices', title: '选择题判分', icon: 'List' })
       base.push({ path: '/grading', title: '非选择题阅卷', icon: 'EditPen' })
+      base.push({ path: '/analytics', title: '学情分析', icon: 'DataAnalysis' })
     }
     if (role === 'group_leader' || role === 'teacher') {
       base.push({ path: '/exams', title: '考试列表', icon: 'Document' })
@@ -58,6 +59,7 @@ export const useAuthStore = defineStore('auth', () => {
       base.push({ path: '/exceptions', title: '异常中心', icon: 'Warning' })
       base.push({ path: '/choices', title: '选择题判分', icon: 'List' })
       base.push({ path: '/precheck', title: '预阅卷预览', icon: 'View' })
+      base.push({ path: '/analytics', title: '学情分析', icon: 'DataAnalysis' })
     }
     return base
   })
