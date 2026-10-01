@@ -114,7 +114,15 @@
         </el-card>
         <el-card shadow="never" class="stat-card">
           <div class="stat-value">{{ summary.cut_blocks - summary.cut_failed }} / {{ summary.cut_blocks }}</div>
-          <div class="stat-label">题块切割成功</div>
+          <div class="stat-label">阅卷题块切割成功</div>
+        </el-card>
+        <el-card shadow="never" class="stat-card">
+          <div class="stat-value">{{ summary.exam_number_matched }} / {{ summary.exam_number_found }}</div>
+          <div class="stat-label">考号匹配花名册</div>
+        </el-card>
+        <el-card shadow="never" class="stat-card">
+          <div class="stat-value">{{ summary.cut_positioning }}</div>
+          <div class="stat-label">定位区（不计分）</div>
         </el-card>
         <el-card shadow="never" class="stat-card">
           <div class="stat-value">{{ summary.choice_correct }} / {{ summary.choice_total }}</div>
@@ -152,6 +160,13 @@
                 <template #default="{ row }">
                   <span v-if="row.exam_number_ocr">{{ row.exam_number_ocr }}</span>
                   <el-tag v-else size="small" type="warning">未识别</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="花名册" width="110">
+                <template #default="{ row }">
+                  <el-tag v-if="matchState(row) === 'matched'" size="small" type="success">已匹配</el-tag>
+                  <el-tag v-else-if="matchState(row) === 'unmatched'" size="small" type="danger">不在花名册</el-tag>
+                  <span v-else>—</span>
                 </template>
               </el-table-column>
               <el-table-column label="倾斜角" width="90">
@@ -283,10 +298,19 @@
         </div>
         <el-table :data="pageDialogTarget.cut_result || []" border size="small" class="block-table">
           <el-table-column prop="index" label="#" width="50" />
-          <el-table-column label="类型" width="100">
-            <template #default="{ row }">{{ regionTypeText(row.region_type) }}</template>
+          <el-table-column label="类型" width="120">
+            <template #default="{ row }">
+              {{ regionTypeText(row.region_type) }}
+              <el-tag v-if="row.grading === false" size="small" type="info" style="margin-left: 4px">仅定位</el-tag>
+            </template>
           </el-table-column>
           <el-table-column prop="question_number" label="题号" width="80" />
+          <el-table-column label="题块组" width="110">
+            <template #default="{ row }">
+              <span v-if="row.group_key">〔组{{ row.group_key }}〕×{{ row.region_count || 1 }}</span>
+              <span v-else>—</span>
+            </template>
+          </el-table-column>
           <el-table-column label="尺寸(px)" width="120">
             <template #default="{ row }">{{ row.width_px }} × {{ row.height_px }}</template>
           </el-table-column>
@@ -328,7 +352,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type UploadUserFile } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
-import { getExams, type Exam } from '@/api/exams'
+import { getExams, getExamStudents, type Exam } from '@/api/exams'
 import { useAuthStore } from '@/stores/auth'
 import {
   OMR_STATUS_LABELS,
@@ -355,6 +379,7 @@ const auth = useAuthStore()
 
 const exams = ref<Exam[]>([])
 const examId = ref('')
+const rosterNumbers = ref<Set<string>>(new Set())
 const sessionId = ref('')
 const session = ref<PrecheckSessionDetail | null>(null)
 const loading = ref(false)
@@ -390,6 +415,9 @@ const summary = computed(() => ({
   pages: session.value?.summary?.pages ?? 0,
   cut_blocks: session.value?.summary?.cut_blocks ?? 0,
   cut_failed: session.value?.summary?.cut_failed ?? 0,
+  cut_positioning: session.value?.summary?.cut_positioning ?? 0,
+  exam_number_found: session.value?.summary?.exam_number_found ?? 0,
+  exam_number_matched: session.value?.summary?.exam_number_matched ?? 0,
   choice_total: session.value?.summary?.choice_total ?? 0,
   choice_correct: session.value?.summary?.choice_correct ?? 0,
   choice_exception: session.value?.summary?.choice_exception ?? 0,
@@ -432,10 +460,26 @@ function omrStatusText(s: string) {
   return OMR_STATUS_LABELS[s] || s
 }
 function regionTypeText(t: string) {
-  return { choice: '选择题', subjective: '非选择题', exam_number: '考号区' }[t] || t
+  return { choice: '选择题', subjective: '非选择题', exam_number: '考号区', name: '姓名区' }[t] || t
 }
 function failedBlocks(page: PrecheckPage) {
   return (page.cut_result || []).filter((b) => b.status !== 'ok').length
+}
+function matchState(page: PrecheckPage): 'matched' | 'unmatched' | 'none' {
+  if (!page.exam_number_ocr) return 'none'
+  if (!rosterNumbers.value.size) return 'none'
+  return rosterNumbers.value.has(page.exam_number_ocr) ? 'matched' : 'unmatched'
+}
+
+async function loadRoster() {
+  rosterNumbers.value = new Set()
+  if (!examId.value) return
+  try {
+    const res = await getExamStudents(examId.value)
+    rosterNumbers.value = new Set(res.data.map((s) => s.exam_number).filter(Boolean))
+  } catch {
+    /* 花名册加载失败不阻断预阅卷查看 */
+  }
 }
 
 async function loadExams() {
@@ -455,6 +499,7 @@ async function loadSession() {
   router.replace({ query: { exam_id: examId.value } })
   loading.value = true
   try {
+    await loadRoster()
     const res = await listPrecheckSessions(examId.value)
     const current = res.data.find((s) => ['active', 'running', 'done'].includes(s.status))
     if (current) {
@@ -664,7 +709,7 @@ onMounted(loadExams)
 }
 .stat-row {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
 }
 .stat-card {

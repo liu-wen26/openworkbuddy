@@ -25,12 +25,13 @@ from app.core.config import get_settings
 from app.db.base import SessionLocal
 from app.models.exam import Exam
 from app.models.precheck import PrecheckPage, PrecheckSession
+from app.models.student import ExamStudent, Student
 from app.models.template import AnswerCardTemplate
 from app.models.template_config import AIScoringConfig, ChoiceAnswer, TemplateRegion
-from app.services import ai_service
+from app.services import ai_service, choice_grid_service
 from app.services.choice_service import _choice_grid
 from app.services.exam_service import check_exam_modifiable
-from app.services.import_service import _exam_number_grid, _render_pdf_page
+from app.services.import_service import _exam_number_grid, _render_pdf_page, _stack_crops
 from app.utils import image as image_utils
 from app.utils import omr
 from app.utils.file_storage import absolute_path, ensure_dir, relative_to_root, save_upload_to
@@ -216,18 +217,39 @@ def run_precheck(session_id: str | UUID) -> None:
         summary = _empty_summary()
         summary["samples"] = session.sample_count
         summary["provider"] = provider.name
+        roster_numbers = _exam_number_set(db, exam.id)
 
+        # 1) 逐页预处理 + 考号识别（跨页题块组需先拿到文件组内全部页的预处理图）
+        prepared_by_file: Dict[str, List[Tuple[PrecheckPage, np.ndarray]]] = {}
         for page in pages:
             try:
-                _process_page(db, session, template, regions, page_count, page,
-                              choice_answers, ai_configs, provider)
-                summary["pages"] += 1
-                _accumulate(summary, page)
+                processed = _preprocess_page(session, template, page)
+                page_regions = [r for r in regions if r.page_index == _page_index(page, page_count)]
+                page.exam_number_ocr = _recognize_exam_number(processed, template, page_regions)
+                prepared_by_file.setdefault(page.original_file_path, []).append((page, processed))
             except Exception as exc:  # noqa: BLE001
-                logger.exception("预阅卷处理页失败 page=%s: %s", page.id, exc)
+                logger.exception("预阅卷预处理页失败 page=%s: %s", page.id, exc)
                 page.status = "exception"
                 page.cut_result = page.cut_result or []
                 db.flush()
+
+        # 2) 按源文件分组切割 + OMR / AI（题块组口径与正式导入一致，支持跨页合并）
+        for file_pages in prepared_by_file.values():
+            try:
+                _process_group_pages(
+                    db, session, template, regions, page_count, file_pages,
+                    choice_answers, ai_configs, provider,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("预阅卷切割失败 file=%s: %s", file_pages[0][0].original_file_path, exc)
+                for p, _img in file_pages:
+                    p.status = "exception"
+                db.flush()
+
+        for page in pages:
+            if page.status != "pending":
+                summary["pages"] += 1
+            _accumulate(summary, page, roster_numbers)
 
         session.page_count = len(pages)
         session.summary = summary
@@ -245,20 +267,8 @@ def run_precheck(session_id: str | UUID) -> None:
         db.close()
 
 
-def _process_page(
-    db: Session,
-    session: PrecheckSession,
-    template: AnswerCardTemplate,
-    regions: List[TemplateRegion],
-    page_count: int,
-    page: PrecheckPage,
-    choice_answers: Dict[str, ChoiceAnswer],
-    ai_configs: Dict[str, AIScoringConfig],
-    provider: ai_service.AIServiceProvider,
-) -> None:
-    page_index = (page.original_page_index or 0) % page_count
-
-    # 1. 渲染 + 预处理
+def _preprocess_page(session: PrecheckSession, template: AnswerCardTemplate, page: PrecheckPage) -> np.ndarray:
+    """渲染 + 预处理单页，落盘并回填倾斜角，返回预处理图。"""
     raw = _load_page_image(page)
     processed, meta = image_utils.preprocess_page(
         raw,
@@ -270,70 +280,124 @@ def _process_page(
     image_utils.save_image(processed, processed_path)
     page.preprocessed_image_path = relative_to_root(processed_path)
     page.tilt_angle = meta["tilt_angle"]
+    return processed
 
-    page_regions = [r for r in regions if r.page_index == page_index]
 
-    # 2. 考号识别
-    page.exam_number_ocr = _recognize_exam_number(
-        processed, template, page_regions
-    )
+def _process_group_pages(
+    db: Session,
+    session: PrecheckSession,
+    template: AnswerCardTemplate,
+    regions: List[TemplateRegion],
+    page_count: int,
+    file_pages: List[Tuple[PrecheckPage, np.ndarray]],
+    choice_answers: Dict[str, ChoiceAnswer],
+    ai_configs: Dict[str, AIScoringConfig],
+    provider: ai_service.AIServiceProvider,
+) -> None:
+    """处理同一源文件（一位学生整份答卷）的样卷页：切割 + OMR + AI。
 
-    # 3. 切割 + 选择题 OMR + 非选择题 AI
-    blocks_dir = _precheck_dir(session, "blocks") / str(page.id)
-    cut_result: List[dict] = []
-    omr_result: List[dict] = []
-    ai_result: List[dict] = []
-    has_failure = False
+    题块组（group_key）可跨页合并，切割结果归属到主区域所在页，与正式导入一致。
+    """
+    cut_by_page: Dict[UUID, List[dict]] = {p.id: [] for p, _ in file_pages}
+    omr_by_page: Dict[UUID, List[dict]] = {p.id: [] for p, _ in file_pages}
+    ai_by_page: Dict[UUID, List[dict]] = {p.id: [] for p, _ in file_pages}
+    failure_by_page: Dict[UUID, bool] = {p.id: False for p, _ in file_pages}
 
-    for order, region in enumerate(page_regions):
-        block, crop = _cut_region(processed, region, blocks_dir, order)
+    blocks_dir = _precheck_dir(session, "blocks")
+    for order, group in enumerate(_collect_precheck_groups(regions, page_count, file_pages)):
+        region = group[0][0]
+        primary_page = group[0][1]
+        block, crop = _cut_group(group, blocks_dir, order)
         if block["status"] != "ok":
-            has_failure = True
+            failure_by_page[primary_page.id] = True
             block.pop("_crop", None)
-            cut_result.append(block)
+            cut_by_page[primary_page.id].append(block)
             continue
 
         if region.region_type == "choice":
-            omr_result.append(_run_omr(crop, block, region, choice_answers, template))
+            omr_by_page[primary_page.id].append(_run_omr(crop, block, region, choice_answers, template))
         elif region.region_type == "subjective":
-            ai_result.append(_run_ai(crop, block, region, ai_configs, provider))
+            ai_by_page[primary_page.id].append(_run_ai(crop, block, region, ai_configs, provider))
         block.pop("_crop", None)
-        cut_result.append(block)
+        cut_by_page[primary_page.id].append(block)
 
-    page.cut_result = cut_result
-    page.omr_result = omr_result
-    page.ai_result = ai_result
-    page.status = "exception" if has_failure else "processed"
+    for page, _img in file_pages:
+        page.cut_result = cut_by_page[page.id]
+        page.omr_result = omr_by_page[page.id]
+        page.ai_result = ai_by_page[page.id]
+        page.status = "exception" if failure_by_page[page.id] else "processed"
     db.flush()
 
 
-def _cut_region(
-    processed: np.ndarray, region: TemplateRegion, blocks_dir: Path, order: int
+def _collect_precheck_groups(
+    regions: List[TemplateRegion],
+    page_count: int,
+    file_pages: List[Tuple[PrecheckPage, np.ndarray]],
+) -> List[List[Tuple[TemplateRegion, PrecheckPage, np.ndarray]]]:
+    """把文件组内各页区域聚合为待切割题块，共享 group_key 的非选择题跨页合并。
+
+    与正式导入的切割口径保持一致；姓名 / 考号区仍保留展示，便于核对框选。
+    """
+    singles: List[List[Tuple[TemplateRegion, PrecheckPage, np.ndarray]]] = []
+    by_group: Dict[str, List[Tuple[TemplateRegion, PrecheckPage, np.ndarray]]] = {}
+    for page, processed in file_pages:
+        page_index = _page_index(page, page_count)
+        for region in regions:
+            if region.page_index != page_index:
+                continue
+            entry = (region, page, processed)
+            key = region.group_key if region.region_type == "subjective" else None
+            if key:
+                by_group.setdefault(key, []).append(entry)
+            else:
+                singles.append([entry])
+    return singles + list(by_group.values())
+
+
+def _cut_group(
+    group: List[Tuple[TemplateRegion, PrecheckPage, np.ndarray]], blocks_dir: Path, order: int
 ) -> Tuple[dict, Optional[np.ndarray]]:
+    """切割单个题块：题块组则纵向拼接各区域作答图（可跨页）。"""
+    primary, primary_page, _ = group[0]
+    # 注：考号 / 姓名区只用于识别与定位，不入阅卷范围，这里仍然展示出来便于核对框选
+    max_score = (
+        sum(float(r.max_score or 0) for r, _p, _im in group)
+        if primary.region_type == "subjective" else float(primary.max_score or 0)
+    )
+    left = min(float(r.x) for r, _p, _im in group)
+    top = min(float(r.y) for r, _p, _im in group)
+    right = max(float(r.x) + float(r.width) for r, _p, _im in group)
+    bottom = max(float(r.y) + float(r.height) for r, _p, _im in group)
     block = {
         "index": order,
-        "region_type": region.region_type,
-        "question_number": region.question_number,
-        "sub_question_number": region.sub_question_number,
-        "max_score": float(region.max_score or 0),
-        "options_count": int(region.options_count or 4),
-        "allow_multiple": bool(region.allow_multiple),
-        "x": float(region.x), "y": float(region.y),
-        "width": float(region.width), "height": float(region.height),
+        "region_type": primary.region_type,
+        "question_number": primary.question_number,
+        "sub_question_number": primary.sub_question_number,
+        "group_key": primary.group_key,
+        "region_count": len(group),
+        "page_id": str(primary_page.id),
+        "max_score": max_score,
+        "options_count": int(primary.options_count or 4),
+        "allow_multiple": bool(primary.allow_multiple),
+        "x": left, "y": top,
+        "width": right - left, "height": bottom - top,
         "image_path": None,
         "width_px": 0, "height_px": 0,
+        "grading": primary.region_type in ("choice", "subjective"),
         "status": "ok",
         "message": None,
     }
     crop: Optional[np.ndarray] = None
     try:
-        crop = image_utils.crop_region(
-            processed, float(region.x), float(region.y),
-            float(region.width), float(region.height),
-        )
-        if crop.size == 0 or min(crop.shape[:2]) < 4:
+        crops = [
+            image_utils.crop_region(im, float(r.x), float(r.y), float(r.width), float(r.height))
+            for r, _p, im in group
+        ]
+        if any(c.size == 0 or min(c.shape[:2]) < 4 for c in crops):
             raise ValueError("切割区域过小")
-        path = blocks_dir / f"{order}.png"
+        crop = crops[0] if len(crops) == 1 else _stack_crops(crops)
+        target_dir = ensure_dir(blocks_dir / str(primary_page.id))
+        path = target_dir / f"{order}.png"
         image_utils.save_image(crop, path)
         block["image_path"] = relative_to_root(path)
         block["height_px"], block["width_px"] = int(crop.shape[0]), int(crop.shape[1])
@@ -360,15 +424,26 @@ def _run_omr(
     if crop is None:
         rec = {"options": "", "ratios": [0.0] * options_count, "confidence": 0.0, "status": "unreadable"}
     else:
-        grid = _choice_grid(template, region)
-        rec = omr.recognize_choice(
-            crop,
-            options_count=options_count,
-            fill_threshold=settings.OMR_FILL_THRESHOLD,
-            option_x_fraction=grid[0] if grid else None,
-            option_y_fractions=grid[1] if grid else None,
-            bubble_radius_fraction=grid[2] if grid else 0.02,
-        )
+        # 标注式模板：优先使用框选时持久化的气泡坐标（可适配任意真实答题卡）
+        spec = choice_grid_service.bubble_centers(region)
+        if spec:
+            centers, radius = spec
+            rec = omr.recognize_choice_by_bubbles(
+                crop,
+                bubble_centers=centers,
+                fill_threshold=settings.OMR_FILL_THRESHOLD,
+                bubble_radius_fraction=radius,
+            )
+        else:
+            grid = _choice_grid(template, region)
+            rec = omr.recognize_choice(
+                crop,
+                options_count=options_count,
+                fill_threshold=settings.OMR_FILL_THRESHOLD,
+                option_x_fraction=grid[0] if grid else None,
+                option_y_fractions=grid[1] if grid else None,
+                bubble_radius_fraction=grid[2] if grid else 0.02,
+            )
 
     item_status = rec["status"]
     is_correct = False
@@ -409,7 +484,8 @@ def _run_ai(
     provider: ai_service.AIServiceProvider,
 ) -> dict:
     config = ai_configs.get(region.question_number or "")
-    max_score = float(region.max_score or 0)
+    # 题块组（group_key）的满分 = 组内各区域分值之和，与正式阅卷一题一任务口径一致
+    max_score = float(block.get("max_score") or 0)
     threshold = float(config.confidence_threshold) if config and config.confidence_threshold is not None \
         else float(settings.LLM_CONFIDENCE_THRESHOLD)
 
@@ -523,7 +599,9 @@ def _empty_summary() -> dict:
         "provider": None,
         "cut_blocks": 0,
         "cut_failed": 0,
+        "cut_positioning": 0,
         "exam_number_found": 0,
+        "exam_number_matched": 0,
         "choice_total": 0,
         "choice_scored": 0,
         "choice_correct": 0,
@@ -534,13 +612,30 @@ def _empty_summary() -> dict:
     }
 
 
-def _accumulate(summary: dict, page: PrecheckPage) -> None:
+def _exam_number_set(db: Session, exam_id: UUID) -> set:
+    """本场考试花名册中的考号集合，用于预阅卷时校验识别结果能否匹配考生。"""
+    rows = (
+        db.query(Student.exam_number)
+        .join(ExamStudent, ExamStudent.student_id == Student.id)
+        .filter(ExamStudent.exam_id == exam_id)
+        .all()
+    )
+    return {r[0] for r in rows if r[0]}
+
+
+def _accumulate(summary: dict, page: PrecheckPage, roster_numbers: set) -> None:
     for block in (page.cut_result or []):
+        # 考号 / 姓名区仅用于识别与定位，不计入阅卷题块统计，保持与正式导入口径一致
+        if not block.get("grading", True):
+            summary["cut_positioning"] += 1
+            continue
         summary["cut_blocks"] += 1
         if block.get("status") != "ok":
             summary["cut_failed"] += 1
     if page.exam_number_ocr:
         summary["exam_number_found"] += 1
+        if page.exam_number_ocr in roster_numbers:
+            summary["exam_number_matched"] += 1
     for item in (page.omr_result or []):
         summary["choice_total"] += 1
         if item.get("status") == "ok":
@@ -611,16 +706,34 @@ def _recognize_exam_number(
         processed, float(region.x), float(region.y),
         float(region.width), float(region.height),
     )
-    grid = _exam_number_grid(template, region)
-    value, _confidence = omr.recognize_exam_number(
-        crop,
-        digits=int(template.exam_number_digits or 9),
-        fill_threshold=settings.OMR_FILL_THRESHOLD,
-        column_x_fractions=grid[0] if grid else None,
-        row_y_fractions=grid[1] if grid else None,
-        bubble_radius_fraction=grid[2] if grid else 0.01,
-    )
+    digits = int(template.exam_number_digits or 9)
+    # 标注式模板：优先使用框选时生成的填涂格坐标（适配真实答题卡）
+    spec = choice_grid_service.digit_grid(region)
+    if spec:
+        cols, rows, radius = spec
+        value, _confidence = omr.read_by_grid(
+            crop,
+            digits=digits,
+            column_x_fractions=cols,
+            row_y_fractions=rows,
+            fill_threshold=settings.OMR_FILL_THRESHOLD,
+            bubble_radius_fraction=radius,
+        )
+    else:
+        grid = _exam_number_grid(template, region)
+        value, _confidence = omr.recognize_exam_number(
+            crop,
+            digits=digits,
+            fill_threshold=settings.OMR_FILL_THRESHOLD,
+            column_x_fractions=grid[0] if grid else None,
+            row_y_fractions=grid[1] if grid else None,
+            bubble_radius_fraction=grid[2] if grid else 0.01,
+        )
     return value
+
+
+def _page_index(page: PrecheckPage, page_count: int) -> int:
+    return (page.original_page_index or 0) % max(1, page_count)
 
 
 def _load_page_image(page: PrecheckPage) -> np.ndarray:

@@ -16,6 +16,7 @@ from uuid import UUID
 import numpy as np
 import pymupdf as fitz
 from fastapi import HTTPException, UploadFile, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -447,11 +448,14 @@ def _process_file_group(
         db, batch, template, regions, page_count, prepared
     )
 
-    # 3. 切割题块 + 更新页状态
-    for page, processed, _meta in prepared:
+    # 3. 回填考号/学生 + 切割题块（题块组可跨页合并）+ 更新页状态
+    for page, _processed, _meta in prepared:
         page.exam_number_ocr = exam_number
         page.student_id = matched_student.id if matched_student else None
-        _cut_blocks(db, batch, template, regions, page_count, page, processed)
+
+    _cut_blocks_file_group(db, batch, regions, page_count, prepared)
+
+    for page, _processed, _meta in prepared:
         page.status = "exception" if _page_has_exception(db, page) else (
             "processed" if matched_student else "matched"
         )
@@ -532,59 +536,66 @@ def _resolve_exam_number(
     return recognized, student, source_page
 
 
-def _cut_blocks(
-    db: Session,
-    batch: ImportBatch,
-    template: AnswerCardTemplate,
+def _collect_block_groups(
     regions: List[TemplateRegion],
     page_count: int,
-    page: ImportedPage,
-    processed: np.ndarray,
+    prepared: List[Tuple[ImportedPage, np.ndarray, dict]],
+) -> List[List[Tuple[TemplateRegion, ImportedPage, np.ndarray]]]:
+    """把文件组内各页区域聚合为待切割题块。
+
+    同一道非选择题跨页 / 跨栏被框选成多个区域时共享 group_key，合并为一个题块
+    （各区域作答图纵向拼接）；姓名 / 考号区仅用于识别与定位，不参与阅卷，不切割。
+    """
+    singles: List[List[Tuple[TemplateRegion, ImportedPage, np.ndarray]]] = []
+    by_group: dict[str, List[Tuple[TemplateRegion, ImportedPage, np.ndarray]]] = {}
+    for page, processed, _meta in prepared:
+        page_index = _page_index(page, page_count)
+        for region in regions:
+            if region.page_index != page_index:
+                continue
+            if region.region_type not in ("choice", "subjective"):
+                continue
+            entry = (region, page, processed)
+            key = region.group_key if region.region_type == "subjective" else None
+            if key:
+                by_group.setdefault(key, []).append(entry)
+            else:
+                singles.append([entry])
+    return singles + list(by_group.values())
+
+
+def _cut_blocks_file_group(
+    db: Session,
+    batch: ImportBatch,
+    regions: List[TemplateRegion],
+    page_count: int,
+    prepared: List[Tuple[ImportedPage, np.ndarray, dict]],
 ) -> None:
-    if not page.preprocessed_image_path:
+    """按文件组切割全部题块（题块组可跨页合并）。"""
+    if not prepared:
         return
-    page_index = _page_index(page, page_count)
-    page_regions = [r for r in regions if r.page_index == page_index]
-    if not page_regions:
-        return
-
-    blocks_dir = get_batch_dir(page.exam_id, batch.id, "blocks")
-
-    # 非选择题支持「题块组」：同一题跨栏/跨区域框选时共享 group_key，合并为一个题块，
-    # 保证导入后一题一任务、按题分发不跳题；其余区域各自成块。
-    groups: List[List[TemplateRegion]] = []
-    by_group: dict[str, List[TemplateRegion]] = {}
-    for region in page_regions:
-        key = region.group_key if region.region_type == "subjective" else None
-        if key:
-            by_group.setdefault(key, []).append(region)
-        else:
-            groups.append([region])
-    groups.extend(by_group.values())
-
-    for group in groups:
-        _cut_block(db, batch, page, processed, blocks_dir, group)
+    blocks_dir = get_batch_dir(batch.exam_id, batch.id, "blocks")
+    for group in _collect_block_groups(regions, page_count, prepared):
+        _cut_block(db, batch, group, blocks_dir)
 
 
 def _cut_block(
     db: Session,
     batch: ImportBatch,
-    page: ImportedPage,
-    processed: np.ndarray,
+    group: List[Tuple[TemplateRegion, ImportedPage, np.ndarray]],
     blocks_dir: Path,
-    group: List[TemplateRegion],
 ) -> None:
-    """切割单个题块：单区域直接裁剪，题块组则纵向拼接各区域作答图。"""
-    primary = group[0]
-    x = min(float(r.x) for r in group)
-    y = min(float(r.y) for r in group)
-    width = max(float(r.x) + float(r.width) for r in group) - x
-    height = max(float(r.y) + float(r.height) for r in group) - y
+    """切割单个题块：单区域直接裁剪，题块组则纵向拼接各区域作答图（可跨页）。"""
+    primary, primary_page, _ = group[0]
+    x = min(float(r.x) for r, _p, _im in group)
+    y = min(float(r.y) for r, _p, _im in group)
+    width = max(float(r.x) + float(r.width) for r, _p, _im in group) - x
+    height = max(float(r.y) + float(r.height) for r, _p, _im in group) - y
 
     block = AnswerBlock(
-        page_id=page.id,
-        exam_id=page.exam_id,
-        student_id=page.student_id,
+        page_id=primary_page.id,
+        exam_id=primary_page.exam_id,
+        student_id=primary_page.student_id,
         region_id=primary.id,
         question_number=primary.question_number,
         block_type=primary.region_type,
@@ -596,10 +607,8 @@ def _cut_block(
 
     try:
         crops = [
-            image_utils.crop_region(
-                processed, float(r.x), float(r.y), float(r.width), float(r.height)
-            )
-            for r in group
+            image_utils.crop_region(im, float(r.x), float(r.y), float(r.width), float(r.height))
+            for r, _p, im in group
         ]
         if any(c.size == 0 or min(c.shape[:2]) < 4 for c in crops):
             raise ValueError("切割区域过小")
@@ -611,10 +620,61 @@ def _cut_block(
         logger.warning("题块切割失败 block=%s: %s", block.id, exc)
         block.status = "exception"
         _add_exception(
-            db, batch, page, block, "cut_failed",
+            db, batch, primary_page, block, "cut_failed",
             f"题块 {primary.question_number or primary.region_type} 切割失败",
-            snapshot=page.preprocessed_image_path,
+            snapshot=primary_page.preprocessed_image_path,
         )
+
+
+def _recut_file_group_blocks(
+    db: Session,
+    batch: ImportBatch,
+    template: AnswerCardTemplate,
+    page: ImportedPage,
+    processed: np.ndarray,
+) -> None:
+    """重切该页所在文件组的全部题块（含跨页题块组），保证合并口径一致。"""
+    page_count = max(1, template.page_count)
+    siblings = (
+        db.query(ImportedPage)
+        .filter(
+            ImportedPage.batch_id == page.batch_id,
+            ImportedPage.original_file_path == page.original_file_path,
+        )
+        .order_by(ImportedPage.original_page_index)
+        .all()
+    )
+    if not siblings:
+        return
+
+    regions = db.query(TemplateRegion).filter(TemplateRegion.template_id == template.id).all()
+    sibling_ids = [p.id for p in siblings]
+    sibling_indexes = {_page_index(p, page_count) for p in siblings}
+    sibling_region_ids = [r.id for r in regions if r.page_index in sibling_indexes]
+
+    # 删除本文件组题块：直接归属的，以及题块组区域落在本组页上的
+    db.query(AnswerBlock).filter(
+        AnswerBlock.exam_id == page.exam_id,
+        or_(
+            AnswerBlock.page_id.in_(sibling_ids),
+            AnswerBlock.region_id.in_(sibling_region_ids),
+        ),
+    ).delete(synchronize_session=False)
+    db.flush()
+
+    prepared: List[Tuple[ImportedPage, np.ndarray, dict]] = []
+    for p in siblings:
+        if p.id == page.id:
+            prepared.append((p, processed, {}))
+            continue
+        if not p.preprocessed_image_path:
+            continue
+        try:
+            prepared.append((p, image_utils.load_image(absolute_path(p.preprocessed_image_path)), {}))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("重切读取兄弟页图像失败 page=%s: %s", p.id, exc)
+
+    _cut_blocks_file_group(db, batch, regions, page_count, prepared)
 
 
 def _stack_crops(crops: List[np.ndarray]) -> np.ndarray:
@@ -679,11 +739,12 @@ def set_page_exam_number(
         db.refresh(page)
         return page
 
-    # 学生已匹配：补齐题块
-    if template and not db.query(AnswerBlock).filter(AnswerBlock.page_id == page.id).first():
+    # 学生已匹配：补齐题块（重切整个文件组，含跨页题块组）
+    if template and page.preprocessed_image_path and not db.query(AnswerBlock).filter(
+        AnswerBlock.page_id == page.id
+    ).first():
         processed = image_utils.load_image(absolute_path(page.preprocessed_image_path))
-        regions = db.query(TemplateRegion).filter(TemplateRegion.template_id == template.id).all()
-        _cut_blocks(db, batch, template, regions, max(1, template.page_count), page, processed)
+        _recut_file_group_blocks(db, batch, template, page, processed)
 
     for p in siblings:
         p.status = "processed"
@@ -726,8 +787,6 @@ def recut_page(
     page.tilt_angle = meta["tilt_angle"]
     page.perspective_corrected = meta["perspective_corrected"]
 
-    # 重建题块
-    db.query(AnswerBlock).filter(AnswerBlock.page_id == page.id).delete()
     # 清理该页的 cut_failed / tilt_exceed 异常
     db.query(ExamException).filter(
         ExamException.page_id == page.id,
@@ -740,8 +799,8 @@ def recut_page(
         ExamException.resolution_action: "recut",
     }, synchronize_session=False)
 
-    regions = db.query(TemplateRegion).filter(TemplateRegion.template_id == template.id).all()
-    _cut_blocks(db, batch, template, regions, max(1, template.page_count), page, processed)
+    # 重建题块：重切整个文件组，跨页题块组保持一致
+    _recut_file_group_blocks(db, batch, template, page, processed)
     if meta["tilt_exceed"]:
         _add_exception(
             db, batch, page, None, "tilt_exceed",

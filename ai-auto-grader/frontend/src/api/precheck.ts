@@ -9,7 +9,9 @@ export interface PrecheckSummary {
   provider?: string | null
   cut_blocks: number
   cut_failed: number
+  cut_positioning: number
   exam_number_found: number
+  exam_number_matched: number
   choice_total: number
   choice_scored: number
   choice_correct: number
@@ -24,6 +26,9 @@ export interface PrecheckCutBlock {
   region_type: string
   question_number?: string | null
   sub_question_number?: string | null
+  group_key?: string | null
+  region_count?: number
+  grading?: boolean
   max_score: number
   options_count: number
   allow_multiple: boolean
