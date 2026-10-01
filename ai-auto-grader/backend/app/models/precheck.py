@@ -40,6 +40,8 @@ class PrecheckPage(Base):
     original_page_index = Column(Integer, nullable=True)
     preprocessed_image_path = Column(String(512), nullable=True)
     exam_number_ocr = Column(String(64), nullable=True)
+    name_ocr = Column(String(64), nullable=True)   # 视觉识别的姓名（用于按姓名兜底匹配）
+    class_ocr = Column(String(64), nullable=True)  # 视觉识别的班级
     tilt_angle = Column(Numeric(6, 2), nullable=True)
     status = Column(String(32), default="pending", nullable=False)  # pending / processed / exception
 

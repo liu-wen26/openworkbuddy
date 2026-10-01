@@ -162,6 +162,14 @@
                   <el-tag v-else size="small" type="warning">未识别</el-tag>
                 </template>
               </el-table-column>
+              <el-table-column label="识别姓名/班级" width="150">
+                <template #default="{ row }">
+                  <span v-if="row.name_ocr || row.class_ocr">
+                    {{ [row.name_ocr, row.class_ocr].filter(Boolean).join(' / ') }}
+                  </span>
+                  <span v-else>—</span>
+                </template>
+              </el-table-column>
               <el-table-column label="花名册" width="110">
                 <template #default="{ row }">
                   <el-tag v-if="matchState(row) === 'matched'" size="small" type="success">已匹配</el-tag>
@@ -460,7 +468,7 @@ function omrStatusText(s: string) {
   return OMR_STATUS_LABELS[s] || s
 }
 function regionTypeText(t: string) {
-  return { choice: '选择题', subjective: '非选择题', exam_number: '考号区', name: '姓名区' }[t] || t
+  return { choice: '选择题', subjective: '非选择题', exam_number: '考号区', name: '姓名区', class: '班级区' }[t] || t
 }
 function failedBlocks(page: PrecheckPage) {
   return (page.cut_result || []).filter((b) => b.status !== 'ok').length

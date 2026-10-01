@@ -5,9 +5,11 @@
 import json
 import logging
 import math
+import re
 import shutil
 import uuid
 import zipfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -40,13 +42,28 @@ from app.utils.file_storage import (
 )
 from app.services.template_service import PAPER_SIZES
 from app.services.exam_service import check_exam_modifiable
-from app.services import choice_grid_service, notification_service, realtime
+from app.services import choice_grid_service, notification_service, ocr_service, realtime
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 PDF_ZOOM = 200 / 72  # 约 200 DPI
+
+# 参与身份识别的区域类型（考号 / 姓名 / 班级），仅用于识别定位，不参与阅卷切割
+IDENTITY_REGION_TYPES = ("exam_number", "name", "class")
+
+
+@dataclass
+class _Identity:
+    """文件组身份识别结果：识别到的考号 / 姓名 / 班级，以及花名册匹配到的学生。"""
+
+    exam_number: Optional[str] = None
+    name: Optional[str] = None
+    class_name: Optional[str] = None
+    student: Optional[Student] = None
+    source_page: Optional[ImportedPage] = None
+
 
 # 与 template_service 渲染答题卡考号区时保持一致的布局常量（单位 pt）
 EXAM_NUMBER_GRID = {
@@ -443,45 +460,71 @@ def _process_file_group(
     if not prepared:
         return
 
-    # 2. 识别考号（取该文件首个含考号区且识别成功的页）
-    exam_number, matched_student, page_of_number = _resolve_exam_number(
-        db, batch, template, regions, page_count, prepared
-    )
+    # 2. 识别身份信息（考号 / 姓名 / 班级）：OMR 填涂或视觉 OCR，取该文件首个可识别页
+    identity = _resolve_identity(db, batch, template, regions, page_count, prepared)
 
-    # 3. 回填考号/学生 + 切割题块（题块组可跨页合并）+ 更新页状态
+    # 3. 回填考号/姓名/班级/学生 + 切割题块（题块组可跨页合并）+ 更新页状态
     for page, _processed, _meta in prepared:
-        page.exam_number_ocr = exam_number
-        page.student_id = matched_student.id if matched_student else None
+        page.exam_number_ocr = identity.exam_number
+        page.name_ocr = identity.name
+        page.class_ocr = identity.class_name
+        page.student_id = identity.student.id if identity.student else None
 
     _cut_blocks_file_group(db, batch, regions, page_count, prepared)
 
     for page, _processed, _meta in prepared:
         page.status = "exception" if _page_has_exception(db, page) else (
-            "processed" if matched_student else "matched"
+            "processed" if identity.student else "matched"
         )
 
     db.flush()
 
 
-def _resolve_exam_number(
+def _resolve_identity(
     db: Session,
     batch: ImportBatch,
     template: AnswerCardTemplate,
     regions: List[TemplateRegion],
     page_count: int,
     prepared: List[Tuple[ImportedPage, np.ndarray, dict]],
-) -> Tuple[Optional[str], Optional[Student], Optional[ImportedPage]]:
+) -> _Identity:
+    """识别文件组身份信息（考号 / 姓名 / 班级）并绑定花名册学生。
+
+    exam_number_mode=ocr：考号 / 姓名 / 班级全部交给视觉模型识别（手写场景）；
+    omr：考号走填涂识别，若模板开启姓名 OCR 或绘制了班级区，再补充姓名 / 班级视觉识别，
+    用于考号识别失败或不在花名册时按姓名兜底匹配。
+    """
+    identity = _Identity()
+    mode = str(template.exam_number_mode or "omr").lower()
+
+    if mode == "ocr":
+        _recognize_identity_by_ocr(db, batch, template, regions, page_count, prepared, identity)
+    else:
+        _recognize_exam_number_by_omr(db, batch, template, regions, page_count, prepared, identity)
+        if template.name_ocr_enabled or _region_exists(regions, "class"):
+            _recognize_name_class_by_ocr(template, regions, page_count, prepared, identity)
+
+    _bind_student(db, batch, identity)
+    return identity
+
+
+def _recognize_exam_number_by_omr(
+    db: Session,
+    batch: ImportBatch,
+    template: AnswerCardTemplate,
+    regions: List[TemplateRegion],
+    page_count: int,
+    prepared: List[Tuple[ImportedPage, np.ndarray, dict]],
+    identity: _Identity,
+) -> None:
+    """OMR 模式：按填涂格读取考号（兼容标注式真实答题卡与渲染常量两条路径）。"""
     digits = int(template.exam_number_digits or 9)
     exam_number_region = next((r for r in regions if r.region_type == "exam_number"), None)
-
     if not exam_number_region:
-        return None, None, None
+        return
 
-    recognized: Optional[str] = None
-    source_page: Optional[ImportedPage] = None
     for page, processed, _meta in prepared:
-        page_index = _page_index(page, page_count)
-        if exam_number_region.page_index != page_index:
+        if exam_number_region.page_index != _page_index(page, page_count):
             continue
         crop = image_utils.crop_region(
             processed,
@@ -492,7 +535,7 @@ def _resolve_exam_number(
         spec = choice_grid_service.digit_grid(exam_number_region)
         if spec:
             cols, rows, radius = spec
-            value, confidence = omr.read_by_grid(
+            value, _confidence = omr.read_by_grid(
                 crop, digits=digits,
                 column_x_fractions=cols, row_y_fractions=rows,
                 fill_threshold=settings.OMR_FILL_THRESHOLD,
@@ -500,40 +543,159 @@ def _resolve_exam_number(
             )
         else:
             grid = _exam_number_grid(template, exam_number_region)
-            value, confidence = omr.recognize_exam_number(
+            value, _confidence = omr.recognize_exam_number(
                 crop, digits=digits, fill_threshold=settings.OMR_FILL_THRESHOLD,
                 column_x_fractions=grid[0] if grid else None,
                 row_y_fractions=grid[1] if grid else None,
                 bubble_radius_fraction=grid[2] if grid else 0.01,
             )
         if value:
-            recognized = value
-            source_page = page
-            break
+            identity.exam_number = value
+            identity.source_page = page
+            return
 
-    if not recognized:
-        _add_exception(
-            db, batch, prepared[0][0], None, "exam_number_not_found",
-            "考号识别失败，需人工指定考号",
-            snapshot=prepared[0][0].preprocessed_image_path,
+    _add_exception(
+        db, batch, prepared[0][0], None, "exam_number_not_found",
+        "考号识别失败，需人工指定考号",
+        snapshot=prepared[0][0].preprocessed_image_path,
+    )
+
+
+def _recognize_identity_by_ocr(
+    db: Session,
+    batch: ImportBatch,
+    template: AnswerCardTemplate,
+    regions: List[TemplateRegion],
+    page_count: int,
+    prepared: List[Tuple[ImportedPage, np.ndarray, dict]],
+    identity: _Identity,
+) -> None:
+    """OCR 模式：从考号 / 姓名 / 班级区裁剪作答图，交给视觉模型识别手写内容。"""
+    digits = int(template.exam_number_digits or 9)
+    wanted = ["exam_number", "name", "class_name"]
+    for page, processed, _meta in prepared:
+        page_regions = _identity_regions(regions, _page_index(page, page_count))
+        if not page_regions:
+            continue
+        result = ocr_service.recognize_fields(
+            processed, page_regions, wanted, digits=digits, hint=_identity_hint(digits)
         )
-        return None, None, None
+        if not result:
+            continue
+        identity.exam_number = result.get("exam_number") or identity.exam_number
+        identity.name = result.get("name") or identity.name
+        identity.class_name = result.get("class_name") or identity.class_name
+        identity.source_page = identity.source_page or page
+        if identity.exam_number or identity.name:
+            return
 
-    student = (
+    _add_exception(
+        db, batch, prepared[0][0], None, "exam_number_not_found",
+        "考号 / 姓名识别失败，需人工指定考号",
+        snapshot=prepared[0][0].preprocessed_image_path,
+    )
+
+
+def _recognize_name_class_by_ocr(
+    template: AnswerCardTemplate,
+    regions: List[TemplateRegion],
+    page_count: int,
+    prepared: List[Tuple[ImportedPage, np.ndarray, dict]],
+    identity: _Identity,
+) -> None:
+    """OMR 模式的补充识别：单独识别姓名 / 班级，用于按姓名兜底匹配。"""
+    for page, processed, _meta in prepared:
+        page_regions = [
+            r for r in _identity_regions(regions, _page_index(page, page_count))
+            if r.region_type in ("name", "class")
+        ]
+        if not page_regions:
+            continue
+        result = ocr_service.recognize_fields(
+            processed, page_regions, ["name", "class_name"], hint="姓名与班级为手写中文"
+        )
+        if not result:
+            continue
+        identity.name = identity.name or result.get("name") or None
+        identity.class_name = identity.class_name or result.get("class_name") or None
+        if identity.name or identity.class_name:
+            return
+
+
+def _bind_student(db: Session, batch: ImportBatch, identity: _Identity) -> None:
+    """按考号优先、姓名兜底绑定花名册学生；未命中时生成人工处理异常。"""
+    if identity.exam_number:
+        identity.student = _find_student_by_exam_number(db, batch.exam_id, identity.exam_number)
+    if not identity.student and identity.name:
+        identity.student = _find_student_by_name(db, batch.exam_id, identity.name, identity.class_name)
+    if identity.student:
+        return
+
+    page = identity.source_page
+    if identity.exam_number:
+        _add_exception(
+            db, batch, page, None, "exam_number_not_match",
+            f"识别考号 {identity.exam_number} 不在本场考试花名册中",
+            snapshot=page.preprocessed_image_path if page else None,
+        )
+    elif identity.name:
+        _add_exception(
+            db, batch, page, None, "exam_number_not_match",
+            f"识别姓名 {identity.name} 未匹配到唯一考生，需人工确认",
+            snapshot=page.preprocessed_image_path if page else None,
+        )
+    # 考号与姓名均未识别时，已在识别阶段生成 exam_number_not_found 异常
+
+
+def _find_student_by_exam_number(db: Session, exam_id: UUID, exam_number: str) -> Optional[Student]:
+    return (
         db.query(Student)
         .join(ExamStudent, ExamStudent.student_id == Student.id)
-        .filter(ExamStudent.exam_id == batch.exam_id, Student.exam_number == recognized)
+        .filter(ExamStudent.exam_id == exam_id, Student.exam_number == exam_number)
         .first()
     )
-    if not student:
-        _add_exception(
-            db, batch, source_page or prepared[0][0], None, "exam_number_not_match",
-            f"识别考号 {recognized} 不在本场考试花名册中",
-            snapshot=(source_page or prepared[0][0]).preprocessed_image_path,
-        )
-        return recognized, None, source_page
 
-    return recognized, student, source_page
+
+def _find_student_by_name(
+    db: Session, exam_id: UUID, name: str, class_name: Optional[str] = None
+) -> Optional[Student]:
+    """按姓名在花名册内匹配：同名多人时用识别到的班级消歧，无法唯一定位返回 None。"""
+    candidates = (
+        db.query(Student)
+        .join(ExamStudent, ExamStudent.student_id == Student.id)
+        .filter(ExamStudent.exam_id == exam_id, Student.name == name)
+        .all()
+    )
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1 and class_name:
+        matched = [s for s in candidates if _class_matches(class_name, s.class_name)]
+        if len(matched) == 1:
+            return matched[0]
+    return None
+
+
+def _class_matches(recognized: str, stored: Optional[str]) -> bool:
+    """班级比对：忽略"班 / 年级 / 组"等后缀与空白差异，任意一方包含另一方即视为同班。"""
+    def _norm(value: Optional[str]) -> str:
+        return re.sub(r"[\s班年级组]", "", value or "")
+
+    a, b = _norm(recognized), _norm(stored)
+    return bool(a) and bool(b) and (a in b or b in a)
+
+
+def _identity_regions(regions: List[TemplateRegion], page_index: int) -> List[TemplateRegion]:
+    return [r for r in regions if r.page_index == page_index and r.region_type in IDENTITY_REGION_TYPES]
+
+
+def _region_exists(regions: List[TemplateRegion], region_type: str) -> bool:
+    return any(r.region_type == region_type for r in regions)
+
+
+def _identity_hint(digits: int) -> str:
+    if digits:
+        return f"考号为 {digits} 位数字，姓名与班级为手写中文"
+    return "考号为手写数字，姓名与班级为手写中文"
 
 
 def _collect_block_groups(

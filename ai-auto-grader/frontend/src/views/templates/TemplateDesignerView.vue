@@ -131,6 +131,7 @@
                 <el-radio-button value="">选择/移动</el-radio-button>
                 <el-radio-button value="exam_number">考号区</el-radio-button>
                 <el-radio-button value="name">姓名区</el-radio-button>
+                <el-radio-button value="class">班级区</el-radio-button>
                 <el-radio-button value="choice">选择题区</el-radio-button>
                 <el-radio-button value="subjective">非选择题框</el-radio-button>
               </el-radio-group>
@@ -188,7 +189,7 @@
                 <el-form-item label="类型">
                   <el-tag>{{ regionTypeText(selectedRegion.region_type) }}</el-tag>
                 </el-form-item>
-                <el-form-item v-if="selectedRegion.region_type !== 'name'" label="题号">
+                <el-form-item v-if="!isIdentityRegion(selectedRegion)" label="题号">
                   <el-input v-model="selectedRegion.question_number" />
                 </el-form-item>
                 <el-form-item v-if="selectedRegion.region_type === 'subjective'" label="子题号">
@@ -197,7 +198,7 @@
                 <el-form-item v-if="selectedRegion.region_type === 'subjective'" label="题块组">
                   <el-input v-model="selectedRegion.group_key" placeholder="同一题跨区域时填写相同值，如 17" />
                 </el-form-item>
-                <el-form-item v-if="selectedRegion.region_type !== 'name'" label="分值">
+                <el-form-item v-if="!isIdentityRegion(selectedRegion)" label="分值">
                   <el-input-number v-model="selectedRegion.max_score" :min="0" :step="0.5" style="width: 100%" />
                 </el-form-item>
 
@@ -226,7 +227,7 @@
                   <el-button size="small" type="primary" plain @click="openTune(selectedIndex)">气泡对齐微调</el-button>
                 </el-form-item>
 
-                <el-form-item label="知识点">
+                <el-form-item v-if="!isIdentityRegion(selectedRegion)" label="知识点">
                   <el-select
                     v-model="selectedRegion.knowledge_tags"
                     multiple
@@ -504,11 +505,16 @@ function regionStyle(r: TemplateRegion) {
 const REGION_TEXT: Record<string, string> = {
   exam_number: '考号区',
   name: '姓名区',
+  class: '班级区',
   choice: '选择题区',
   subjective: '非选择题框',
 }
 function regionTypeText(t: string) {
   return REGION_TEXT[t] || t
+}
+// 考号 / 姓名 / 班级区只用于识别定位，不参与阅卷，无需题号与分值
+function isIdentityRegion(r: TemplateRegion) {
+  return r.region_type === 'exam_number' || r.region_type === 'name' || r.region_type === 'class'
 }
 function regionLabel(r: TemplateRegion) {
   const base = REGION_TEXT[r.region_type] || r.region_type
@@ -1238,6 +1244,10 @@ onBeforeUnmount(() => {
   border-color: #13c2c2;
   background: rgba(19, 194, 194, 0.1);
 }
+.region.t-class {
+  border-color: #722ed1;
+  background: rgba(114, 46, 209, 0.1);
+}
 .region.t-choice {
   border-color: #fa8c16;
   background: rgba(250, 140, 22, 0.1);
@@ -1316,6 +1326,9 @@ onBeforeUnmount(() => {
 }
 .dot.t-name {
   background: #13c2c2;
+}
+.dot.t-class {
+  background: #722ed1;
 }
 .dot.t-choice {
   background: #fa8c16;

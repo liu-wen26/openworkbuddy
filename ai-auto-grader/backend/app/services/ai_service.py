@@ -1,11 +1,15 @@
-"""AI 评分服务抽象层（F7-03）。
+"""AI 评分与识别服务抽象层（F7-03）。
 
 统一三种实现：
   - OpenAICompatibleProvider：云端 OpenAI 兼容 /chat/completions（视觉）
   - LocalModelProvider：本地私有化模型（同样走 OpenAI 兼容协议，可自定义地址与模型）
   - MockAIProvider：未配置任何大模型凭证时的启发式兜底，保证流程可跑通（结果带 mock 标记）
 
-所有实现返回统一的 AIScoreResult，由上层落库并做低置信度转异常处理。
+两类能力：
+  - score_subjective：主观题评分，返回 AIScoreResult
+  - ocr_fields：区域信息识别（手写考号 / 姓名 / 班级），返回 {字段名: 文本}
+
+由上层落库并做低置信度 / 未识别转异常处理。
 """
 
 import base64
@@ -14,7 +18,7 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 import numpy as np
@@ -34,6 +38,22 @@ SYSTEM_PROMPT = (
     "score 不得超过满分；当图片无法辨认或无法确定时，降低 confidence。"
 )
 
+# 待识别字段的中文名，用于组装 OCR 指令
+OCR_FIELD_LABELS = {
+    "exam_number": "考号",
+    "name": "姓名",
+    "class_name": "班级",
+}
+
+OCR_SYSTEM_PROMPT = (
+    "你是一名答题卡信息识别引擎。请只识别图片中指定字段的手写或打印内容，"
+    "并严格以 JSON 返回，键为字段英文名、值为识别出的文本；无法识别的字段返回空字符串。"
+    "只做识别，不要计算、不要解释、不要输出 JSON 以外的任何文字。"
+)
+
+# 识别失败（未配置视觉模型 / 调用异常）时返回空结果，由上层转异常，不阻断主流程
+OCR_EMPTY_RESULT: Dict[str, str] = {}
+
 
 @dataclass
 class AIScoreResult:
@@ -46,13 +66,23 @@ class AIScoreResult:
 
 
 class AIServiceProvider(ABC):
-    """AI 评分提供方统一接口。"""
+    """AI 评分与识别提供方统一接口。"""
 
     name = "base"
 
     @abstractmethod
     def score_subjective(self, image_bytes: bytes, context: Dict[str, Any]) -> AIScoreResult:
         raise NotImplementedError
+
+    def ocr_fields(
+        self, image_bytes: bytes, fields: List[str], hint: Optional[str] = None
+    ) -> Dict[str, str]:
+        """识别图片中指定字段（考号 / 姓名 / 班级）。
+
+        默认实现返回空结果：不具备视觉能力的提供方（如启发式兜底）不应阻断主流程，
+        由上层把"未识别"转成人工处理的异常。
+        """
+        return dict(OCR_EMPTY_RESULT)
 
 
 # ---------------- 提示词构建 ----------------
@@ -102,6 +132,37 @@ def _parse_model_json(text: str, max_score: float) -> Optional[Dict[str, Any]]:
         data["confidence"] = 0.0
     data["confidence"] = max(0.0, min(data["confidence"], 1.0))
     return data
+
+
+def _build_ocr_prompt(fields: List[str], hint: Optional[str]) -> str:
+    lines = ["请识别图片中的以下字段："]
+    for f in fields:
+        lines.append(f"- {f}（{OCR_FIELD_LABELS.get(f, f)}）")
+    if hint:
+        lines.append(f"参考信息：{hint}")
+    example = "{" + ", ".join(f'"{f}": "..."' for f in fields) + "}"
+    lines.append(f"严格返回 JSON，例如：{example}")
+    return "\n".join(lines)
+
+
+def _parse_ocr_json(text: str, fields: List[str]) -> Dict[str, str]:
+    """从模型输出中提取字段 JSON，容忍代码块与多余说明；仅保留请求的字段。"""
+    if not text or not fields:
+        return {}
+    match = re.search(r"\{.*\}", text, re.S)
+    if not match:
+        return {}
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    result: Dict[str, str] = {}
+    for f in fields:
+        value = data.get(f)
+        result[f] = "" if value is None else str(value).strip()
+    return result
 
 
 # ---------------- OpenAI 兼容实现 ----------------
@@ -155,6 +216,42 @@ class OpenAICompatibleProvider(AIServiceProvider):
             detail={"raw": content},
         )
 
+    def ocr_fields(
+        self, image_bytes: bytes, fields: List[str], hint: Optional[str] = None
+    ) -> Dict[str, str]:
+        """调用视觉模型识别区域内的手写/打印字段。"""
+        if not fields or not image_bytes:
+            return {}
+        b64 = base64.b64encode(image_bytes).decode()
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": OCR_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": _build_ocr_prompt(fields, hint)},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    ],
+                },
+            ],
+            "temperature": 0,
+        }
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                resp = client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
+                resp.raise_for_status()
+                body = resp.json()
+            content = body["choices"][0]["message"]["content"]
+        except Exception as exc:  # noqa: BLE001
+            # 识别失败不阻断导入：上层会按"未识别"生成人工处理异常
+            logger.warning("OCR 调用失败 model=%s: %s", self.model, exc)
+            return dict(OCR_EMPTY_RESULT)
+        return _parse_ocr_json(content, fields)
+
 
 class LocalModelProvider(OpenAICompatibleProvider):
     """本地私有化模型：默认使用本地 OpenAI 兼容服务，无需 API Key。"""
@@ -174,6 +271,13 @@ class MockAIProvider(AIServiceProvider):
     """
 
     name = "mock"
+
+    def ocr_fields(
+        self, image_bytes: bytes, fields: List[str], hint: Optional[str] = None
+    ) -> Dict[str, str]:
+        """启发式兜底不具备视觉识别能力，返回空结果，由上层转人工处理异常。"""
+        logger.warning("当前为启发式兜底，无法识别字段 %s，需人工指定", fields)
+        return dict(OCR_EMPTY_RESULT)
 
     def score_subjective(self, image_bytes: bytes, context: Dict[str, Any]) -> AIScoreResult:
         max_score = float(context.get("max_score") or 0)

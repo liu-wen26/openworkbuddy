@@ -18,6 +18,10 @@ COLUMN_PATCHES = [
     ("answer_card_templates", "page_sizes", "JSON"),
     ("template_regions", "group_key", "VARCHAR(64)"),
     ("template_regions", "option_spec", "JSON"),
+    ("imported_pages", "name_ocr", "VARCHAR(64)"),
+    ("imported_pages", "class_ocr", "VARCHAR(64)"),
+    ("precheck_pages", "name_ocr", "VARCHAR(64)"),
+    ("precheck_pages", "class_ocr", "VARCHAR(64)"),
 ]
 
 

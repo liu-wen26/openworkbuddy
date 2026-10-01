@@ -1,6 +1,6 @@
 import request from './request'
 
-export type RegionType = 'exam_number' | 'name' | 'choice' | 'subjective'
+export type RegionType = 'exam_number' | 'name' | 'class' | 'choice' | 'subjective'
 
 export interface TemplateRegion {
   id?: string

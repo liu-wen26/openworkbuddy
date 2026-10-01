@@ -79,6 +79,8 @@ export interface PrecheckPage {
   original_page_index?: number | null
   preprocessed_image_path?: string | null
   exam_number_ocr?: string | null
+  name_ocr?: string | null
+  class_ocr?: string | null
   tilt_angle?: number | null
   status: PrecheckPageStatus
   cut_result?: PrecheckCutBlock[] | null

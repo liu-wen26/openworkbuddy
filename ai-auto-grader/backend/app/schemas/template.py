@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 class TemplateRegionBase(BaseModel):
     page_index: int = 0
-    region_type: str = Field(..., pattern=r"^(exam_number|name|choice|subjective)$")
+    region_type: str = Field(..., pattern=r"^(exam_number|name|class|choice|subjective)$")
     question_number: Optional[str] = None
     sub_question_number: Optional[str] = None
     max_score: Decimal = Decimal("0")

@@ -13,6 +13,7 @@ PAPER_SIZES = {
 REGION_LABELS = {
     "exam_number": "考号",
     "name": "姓名",
+    "class": "班级",
     "choice": "选择题",
     "subjective": "非选择题",
 }
@@ -20,6 +21,7 @@ REGION_LABELS = {
 REGION_COLORS = {
     "exam_number": (0.09, 0.46, 0.94),
     "name": (0.06, 0.72, 0.51),
+    "class": (0.45, 0.18, 0.82),
     "choice": (0.98, 0.63, 0.09),
     "subjective": (0.86, 0.24, 0.29),
 }

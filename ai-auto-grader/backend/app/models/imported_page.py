@@ -21,6 +21,8 @@ class ImportedPage(Base):
     preprocessed_image_path = Column(String(512), nullable=True)
     student_id = Column(Uuid(as_uuid=True), ForeignKey("students.id"), nullable=True, index=True)
     exam_number_ocr = Column(String(64), nullable=True)
+    name_ocr = Column(String(64), nullable=True)  # OCR/OMR 识别出的姓名（用于按姓名兜底匹配）
+    class_ocr = Column(String(64), nullable=True)  # OCR 识别出的班级
     tilt_angle = Column(Numeric(6, 2), nullable=True)  # 检测到的倾斜角度
     perspective_corrected = Column(Boolean, default=False, nullable=False)
     status = Column(String(32), default="pending", nullable=False)  # pending / matched / exception / processed

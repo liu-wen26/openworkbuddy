@@ -16,6 +16,8 @@ class PrecheckPageOut(BaseModel):
     original_page_index: Optional[int] = None
     preprocessed_image_path: Optional[str] = None
     exam_number_ocr: Optional[str] = None
+    name_ocr: Optional[str] = None
+    class_ocr: Optional[str] = None
     tilt_angle: Optional[float] = None
     status: str
     cut_result: Optional[List[Dict[str, Any]]] = None

@@ -28,7 +28,7 @@ from app.models.precheck import PrecheckPage, PrecheckSession
 from app.models.student import ExamStudent, Student
 from app.models.template import AnswerCardTemplate
 from app.models.template_config import AIScoringConfig, ChoiceAnswer, TemplateRegion
-from app.services import ai_service, choice_grid_service
+from app.services import ai_service, choice_grid_service, ocr_service
 from app.services.choice_service import _choice_grid
 from app.services.exam_service import check_exam_modifiable
 from app.services.import_service import _exam_number_grid, _render_pdf_page, _stack_crops
@@ -225,7 +225,10 @@ def run_precheck(session_id: str | UUID) -> None:
             try:
                 processed = _preprocess_page(session, template, page)
                 page_regions = [r for r in regions if r.page_index == _page_index(page, page_count)]
-                page.exam_number_ocr = _recognize_exam_number(processed, template, page_regions)
+                identity = _recognize_identity(processed, template, page_regions)
+                page.exam_number_ocr = identity.get("exam_number")
+                page.name_ocr = identity.get("name")
+                page.class_ocr = identity.get("class_name")
                 prepared_by_file.setdefault(page.original_file_path, []).append((page, processed))
             except Exception as exc:  # noqa: BLE001
                 logger.exception("预阅卷预处理页失败 page=%s: %s", page.id, exc)
@@ -696,17 +699,49 @@ def _ai_config_map(db: Session, exam: Exam) -> Dict[str, AIScoringConfig]:
     return config_map
 
 
-def _recognize_exam_number(
+def _recognize_identity(
     processed: np.ndarray, template: AnswerCardTemplate, page_regions: List[TemplateRegion]
-) -> Optional[str]:
+) -> Dict[str, str]:
+    """识别该页身份信息（考号 / 姓名 / 班级），口径与正式导入一致。
+
+    exam_number_mode=ocr：三者均由视觉模型识别；omr：考号走填涂识别，
+    模板开启姓名 OCR 或存在班级区时再补充姓名 / 班级视觉识别。
+    """
+    mode = str(template.exam_number_mode or "omr").lower()
+    digits = int(template.exam_number_digits or 9)
+    result: Dict[str, str] = {}
+
+    if mode == "ocr":
+        ocr_regions = [r for r in page_regions if r.region_type in ("exam_number", "name", "class")]
+        result.update(ocr_service.recognize_fields(
+            processed, ocr_regions, ["exam_number", "name", "class_name"],
+            digits=digits, hint=f"考号为 {digits} 位数字，姓名与班级为手写中文",
+        ))
+        return result
+
     region = next((r for r in page_regions if r.region_type == "exam_number"), None)
-    if not region:
-        return None
+    if region:
+        value = _read_exam_number_omr(processed, template, region, digits)
+        if value:
+            result["exam_number"] = value
+
+    name_class_regions = [r for r in page_regions if r.region_type in ("name", "class")]
+    if name_class_regions and (
+        template.name_ocr_enabled or any(r.region_type == "class" for r in name_class_regions)
+    ):
+        result.update(ocr_service.recognize_fields(
+            processed, name_class_regions, ["name", "class_name"], hint="姓名与班级为手写中文",
+        ))
+    return result
+
+
+def _read_exam_number_omr(
+    processed: np.ndarray, template: AnswerCardTemplate, region: TemplateRegion, digits: int
+) -> Optional[str]:
     crop = image_utils.crop_region(
         processed, float(region.x), float(region.y),
         float(region.width), float(region.height),
     )
-    digits = int(template.exam_number_digits or 9)
     # 标注式模板：优先使用框选时生成的填涂格坐标（适配真实答题卡）
     spec = choice_grid_service.digit_grid(region)
     if spec:

@@ -657,7 +657,10 @@ def precheck_template(
 # ---------------- helpers ----------------
 
 def _region_label(r) -> str:
-    labels = {"exam_number": "考号区", "name": "姓名区", "choice": "选择题", "subjective": "非选择题"}
+    labels = {
+        "exam_number": "考号区", "name": "姓名区", "class": "班级区",
+        "choice": "选择题", "subjective": "非选择题",
+    }
     base = labels.get(r.region_type, r.region_type)
     return f"{base} {r.question_number}" if r.question_number else base
 

@@ -51,6 +51,8 @@ class ImportedPageOut(BaseModel):
     preprocessed_image_path: Optional[str] = None
     student_id: Optional[UUID] = None
     exam_number_ocr: Optional[str] = None
+    name_ocr: Optional[str] = None
+    class_ocr: Optional[str] = None
     tilt_angle: Optional[Decimal] = None
     perspective_corrected: bool
     status: str
