@@ -29,6 +29,13 @@
 
     <el-table :data="templates" v-loading="loading" border>
       <el-table-column prop="name" label="模板名称" min-width="180" />
+      <el-table-column label="卡面来源" width="120">
+        <template #default="{ row }">
+          <el-tag size="small" :type="row.source_type === 'annotated' ? 'success' : 'info'">
+            {{ row.source_type === 'annotated' ? '原版答题卡标注' : '系统生成卡面' }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column prop="subject" label="学科" width="100" />
       <el-table-column prop="title" label="卡面标题" width="140" />
       <el-table-column label="纸张" width="100">

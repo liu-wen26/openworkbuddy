@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.core.security import decode_token
 from app.db.base import Base, engine
+from app.db.migrate import run_migrations
 from app import models  # noqa: F401  确保所有模型注册到 Base.metadata
 from app.api.v1 import (
     auth, users, exams, templates, imports, choices, grading, precheck, analytics,
@@ -19,6 +20,7 @@ from app.services import realtime
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    run_migrations(engine)
     # 绑定主事件循环，供同步业务代码广播实时事件；Celery 模式下额外启动 Redis 中继
     realtime.bind_loop(asyncio.get_running_loop())
     relay_task = realtime.start_redis_relay()

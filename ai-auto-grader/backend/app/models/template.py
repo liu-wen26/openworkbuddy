@@ -13,6 +13,11 @@ class AnswerCardTemplate(Base):
     id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
     subject = Column(String(64), nullable=True)
+    # 模板来源：generated=系统生成卡面（旧模式）；annotated=上传真实答题卡底图并框选（标注式）
+    source_type = Column(String(16), default="generated", nullable=False)
+    orientation = Column(String(16), default="portrait", nullable=False)  # portrait / landscape
+    # 标注式模板的逐页真实尺寸：[{page_index, width_px, height_px, orientation}]
+    page_sizes = Column(JSON, nullable=True)
     paper_size = Column(String(16), default="A4", nullable=False)
     duplex = Column(Boolean, default=False, nullable=False)
     page_count = Column(Integer, default=1, nullable=False)

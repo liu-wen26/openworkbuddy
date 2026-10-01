@@ -25,7 +25,7 @@ from app.models.exception import ExamException
 from app.models.imported_page import ImportedPage
 from app.models.template import AnswerCardTemplate
 from app.models.template_config import ChoiceAnswer, TemplateRegion
-from app.services import notification_service, realtime
+from app.services import choice_grid_service, notification_service, realtime
 from app.services.template_service import PAPER_SIZES
 from app.utils import image as image_utils
 from app.utils import omr
@@ -139,15 +139,27 @@ def _grade_block(
     if image is None:
         rec = {"options": "", "ratios": [0.0] * options_count, "confidence": 0.0, "status": "unreadable"}
     else:
-        grid = _choice_grid(template, region)
-        rec = omr.recognize_choice(
-            image,
-            options_count=options_count,
-            fill_threshold=settings.OMR_FILL_THRESHOLD,
-            option_x_fraction=grid[0] if grid else None,
-            option_y_fractions=grid[1] if grid else None,
-            bubble_radius_fraction=grid[2] if grid else 0.02,
-        )
+        # 标注式模板：优先使用框选时持久化的气泡坐标（可适配任意真实答题卡）
+        spec = choice_grid_service.bubble_centers(region)
+        if spec:
+            centers, radius = spec
+            rec = omr.recognize_choice_by_bubbles(
+                image,
+                bubble_centers=centers,
+                fill_threshold=settings.OMR_FILL_THRESHOLD,
+                bubble_radius_fraction=radius,
+            )
+        else:
+            # 旧模板（系统生成卡面）：按渲染常量还原网格
+            grid = _choice_grid(template, region)
+            rec = omr.recognize_choice(
+                image,
+                options_count=options_count,
+                fill_threshold=settings.OMR_FILL_THRESHOLD,
+                option_x_fraction=grid[0] if grid else None,
+                option_y_fractions=grid[1] if grid else None,
+                bubble_radius_fraction=grid[2] if grid else 0.02,
+            )
 
     # 2. 判定状态与异常类型
     result_status = "scored"

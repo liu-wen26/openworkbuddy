@@ -21,6 +21,8 @@ class TemplateRegionBase(BaseModel):
     partial_score_rules: Optional[Any] = None
     knowledge_tags: Optional[Any] = None
     config: Optional[Dict[str, Any]] = None
+    group_key: Optional[str] = None
+    option_spec: Optional[Dict[str, Any]] = None
 
 
 class TemplateRegionCreate(TemplateRegionBase):
@@ -38,6 +40,8 @@ class TemplateRegionOut(TemplateRegionBase):
 class TemplateBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     subject: Optional[str] = None
+    source_type: str = Field(default="generated", pattern=r"^(generated|annotated)$")
+    orientation: str = Field(default="portrait", pattern=r"^(portrait|landscape)$")
     paper_size: str = Field(default="A4", pattern=r"^(A3|A4)$")
     duplex: bool = False
     page_count: int = 1
@@ -68,6 +72,7 @@ class TemplateOut(TemplateBase):
     id: UUID
     is_blank: bool
     source_pdf_path: Optional[str] = None
+    page_sizes: Optional[List[Dict[str, Any]]] = None
     created_by: UUID
     created_at: datetime
     updated_at: datetime
@@ -145,3 +150,64 @@ class PrecheckResult(BaseModel):
     error_count: int
     warning_count: int
     issues: List[PrecheckIssue]
+
+
+# ---------------- 标注式底图页 ----------------
+
+class TemplatePageOut(BaseModel):
+    id: UUID
+    template_id: UUID
+    page_index: int
+    width_px: int
+    height_px: int
+    orientation: str
+    is_blank: bool
+    blank_ratio: Optional[Decimal] = None
+    status: str
+
+    class Config:
+        from_attributes = True
+
+
+class TemplatePageUpdate(BaseModel):
+    is_blank: Optional[bool] = None
+
+
+class TemplatePageUploadResult(BaseModel):
+    added: int
+    pages: List[TemplatePageOut]
+
+
+class ChoiceGridRequest(BaseModel):
+    """选择题自动切格参数：框选一大块 → 自动生成一题一区域。"""
+
+    page_index: int = 0
+    x: Decimal
+    y: Decimal
+    width: Decimal
+    height: Decimal
+    start_question: int = 1
+    question_count: int = 10
+    options_count: int = 4
+    columns: int = 1
+    direction: str = Field(default="horizontal", pattern=r"^(horizontal|vertical)$")
+    score: Decimal = Decimal("0")
+
+
+class ChoiceGridOut(BaseModel):
+    regions: List[TemplateRegionCreate]
+
+
+class DigitGridRequest(BaseModel):
+    """考号区填涂格：框选考号区 → 自动生成 位数 × 10 行 的填涂格坐标。"""
+
+    page_index: int = 0
+    x: Decimal
+    y: Decimal
+    width: Decimal
+    height: Decimal
+    digits: int = 9
+
+
+class DigitGridOut(BaseModel):
+    option_spec: Dict[str, Any]

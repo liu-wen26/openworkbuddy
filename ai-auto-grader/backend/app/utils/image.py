@@ -222,3 +222,31 @@ def crop_region(
     h, w = image.shape[:2]
     x0, y0, x1, y1 = relative_to_pixels(x, y, width, height, w, h)
     return image[y0:y1, x0:x1].copy()
+
+
+def ink_ratio(image: np.ndarray) -> float:
+    """估算页面墨迹占比（0~1）：二值化后暗像素的比例，用于空白页判定。"""
+    gray = to_gray(image)
+    if gray.size == 0:
+        return 0.0
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+    return float(np.count_nonzero(binary)) / float(binary.size)
+
+
+def is_blank_page(image: np.ndarray, threshold: float = 0.002) -> Tuple[bool, float]:
+    """判定是否为空白页，返回 (是否空白, 墨迹占比)。"""
+    ratio = ink_ratio(image)
+    return ratio < threshold, ratio
+
+
+def make_thumbnail(image: np.ndarray, max_width: int = 1600) -> np.ndarray:
+    """生成画布展示用缩略图；原图始终按上传尺寸保存，不参与缩放。"""
+    h, w = image.shape[:2]
+    if w <= max_width:
+        return image
+    scale = max_width / float(w)
+    return cv2.resize(image, (int(round(w * scale)), int(round(h * scale))), interpolation=cv2.INTER_AREA)
+
+
+def orientation_of(width: int, height: int) -> str:
+    return "landscape" if width > height else "portrait"

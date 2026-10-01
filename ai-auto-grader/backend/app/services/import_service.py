@@ -39,7 +39,7 @@ from app.utils.file_storage import (
 )
 from app.services.template_service import PAPER_SIZES
 from app.services.exam_service import check_exam_modifiable
-from app.services import notification_service, realtime
+from app.services import choice_grid_service, notification_service, realtime
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -484,13 +484,24 @@ def _resolve_exam_number(
             float(exam_number_region.x), float(exam_number_region.y),
             float(exam_number_region.width), float(exam_number_region.height),
         )
-        grid = _exam_number_grid(template, exam_number_region)
-        value, confidence = omr.recognize_exam_number(
-            crop, digits=digits, fill_threshold=settings.OMR_FILL_THRESHOLD,
-            column_x_fractions=grid[0] if grid else None,
-            row_y_fractions=grid[1] if grid else None,
-            bubble_radius_fraction=grid[2] if grid else 0.01,
-        )
+        # 标注式模板：优先使用框选时持久化的考号填涂格坐标（适配真实答题卡）
+        spec = choice_grid_service.digit_grid(exam_number_region)
+        if spec:
+            cols, rows, radius = spec
+            value, confidence = omr.read_by_grid(
+                crop, digits=digits,
+                column_x_fractions=cols, row_y_fractions=rows,
+                fill_threshold=settings.OMR_FILL_THRESHOLD,
+                bubble_radius_fraction=radius,
+            )
+        else:
+            grid = _exam_number_grid(template, exam_number_region)
+            value, confidence = omr.recognize_exam_number(
+                crop, digits=digits, fill_threshold=settings.OMR_FILL_THRESHOLD,
+                column_x_fractions=grid[0] if grid else None,
+                row_y_fractions=grid[1] if grid else None,
+                bubble_radius_fraction=grid[2] if grid else 0.01,
+            )
         if value:
             recognized = value
             source_page = page
@@ -539,38 +550,87 @@ def _cut_blocks(
 
     blocks_dir = get_batch_dir(page.exam_id, batch.id, "blocks")
 
+    # 非选择题支持「题块组」：同一题跨栏/跨区域框选时共享 group_key，合并为一个题块，
+    # 保证导入后一题一任务、按题分发不跳题；其余区域各自成块。
+    groups: List[List[TemplateRegion]] = []
+    by_group: dict[str, List[TemplateRegion]] = {}
     for region in page_regions:
-        block = AnswerBlock(
-            page_id=page.id,
-            exam_id=page.exam_id,
-            student_id=page.student_id,
-            region_id=region.id,
-            question_number=region.question_number,
-            block_type=region.region_type,
-            x=region.x, y=region.y, width=region.width, height=region.height,
-            status="pending",
-        )
-        db.add(block)
-        db.flush()
+        key = region.group_key if region.region_type == "subjective" else None
+        if key:
+            by_group.setdefault(key, []).append(region)
+        else:
+            groups.append([region])
+    groups.extend(by_group.values())
 
-        try:
-            crop = image_utils.crop_region(
-                processed, float(region.x), float(region.y),
-                float(region.width), float(region.height),
+    for group in groups:
+        _cut_block(db, batch, page, processed, blocks_dir, group)
+
+
+def _cut_block(
+    db: Session,
+    batch: ImportBatch,
+    page: ImportedPage,
+    processed: np.ndarray,
+    blocks_dir: Path,
+    group: List[TemplateRegion],
+) -> None:
+    """切割单个题块：单区域直接裁剪，题块组则纵向拼接各区域作答图。"""
+    primary = group[0]
+    x = min(float(r.x) for r in group)
+    y = min(float(r.y) for r in group)
+    width = max(float(r.x) + float(r.width) for r in group) - x
+    height = max(float(r.y) + float(r.height) for r in group) - y
+
+    block = AnswerBlock(
+        page_id=page.id,
+        exam_id=page.exam_id,
+        student_id=page.student_id,
+        region_id=primary.id,
+        question_number=primary.question_number,
+        block_type=primary.region_type,
+        x=x, y=y, width=width, height=height,
+        status="pending",
+    )
+    db.add(block)
+    db.flush()
+
+    try:
+        crops = [
+            image_utils.crop_region(
+                processed, float(r.x), float(r.y), float(r.width), float(r.height)
             )
-            if crop.size == 0 or min(crop.shape[:2]) < 4:
-                raise ValueError("切割区域过小")
-            block_path = blocks_dir / f"{block.id}.png"
-            image_utils.save_image(crop, block_path)
-            block.image_path = relative_to_root(block_path)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("题块切割失败 block=%s: %s", block.id, exc)
-            block.status = "exception"
-            _add_exception(
-                db, batch, page, block, "cut_failed",
-                f"题块 {region.question_number or region.region_type} 切割失败",
-                snapshot=page.preprocessed_image_path,
-            )
+            for r in group
+        ]
+        if any(c.size == 0 or min(c.shape[:2]) < 4 for c in crops):
+            raise ValueError("切割区域过小")
+        crop = crops[0] if len(crops) == 1 else _stack_crops(crops)
+        block_path = blocks_dir / f"{block.id}.png"
+        image_utils.save_image(crop, block_path)
+        block.image_path = relative_to_root(block_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("题块切割失败 block=%s: %s", block.id, exc)
+        block.status = "exception"
+        _add_exception(
+            db, batch, page, block, "cut_failed",
+            f"题块 {primary.question_number or primary.region_type} 切割失败",
+            snapshot=page.preprocessed_image_path,
+        )
+
+
+def _stack_crops(crops: List[np.ndarray]) -> np.ndarray:
+    """将同一题块组的多个区域裁剪图纵向拼接，宽度不足处补白，便于整体阅卷。"""
+    width = max(c.shape[1] for c in crops)
+    parts: List[np.ndarray] = []
+    for c in crops:
+        if c.shape[1] < width:
+            pad = np.full((c.shape[0], width - c.shape[1], 3), 255, dtype=c.dtype)
+            c = np.hstack([c, pad])
+        parts.append(c)
+    separator = np.full((8, width, 3), 200, dtype=parts[0].dtype)
+    stacked = parts[0]
+    for part in parts[1:]:
+        stacked = np.vstack([stacked, separator, part])
+    return stacked
 
 
 # ---------------- 手动处理 ----------------

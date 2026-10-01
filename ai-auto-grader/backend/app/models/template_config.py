@@ -28,6 +28,10 @@ class TemplateRegion(Base):
     partial_score_rules = Column(JSON, nullable=True)
     knowledge_tags = Column(JSON, nullable=True)
     config = Column(JSON, nullable=True)
+    # 题块组：同一道题在跨栏/跨页时被框选成多个区域，这些区域共享同一 group_key
+    group_key = Column(String(64), nullable=True)
+    # 选择题气泡坐标（区域相对 0~1000）：{"direction","option_labels","radius","bubbles":[{"label","cx","cy"}]}
+    option_spec = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 

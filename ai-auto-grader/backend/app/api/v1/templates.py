@@ -2,7 +2,7 @@ from typing import List, Optional
 from uuid import UUID
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -11,6 +11,7 @@ from app.core.permissions import require_permission, has_permission
 from app.models.user import User
 from app.models.exam import Exam
 from app.models.template import AnswerCardTemplate
+from app.models.template_page import TemplatePage
 from app.models.template_config import TemplateRegion, ChoiceAnswer, AIScoringConfig
 from app.schemas.template import (
     TemplateCreate,
@@ -27,8 +28,16 @@ from app.schemas.template import (
     TemplateImportRequest,
     PrecheckIssue,
     PrecheckResult,
+    TemplatePageOut,
+    TemplatePageUpdate,
+    TemplatePageUploadResult,
+    ChoiceGridRequest,
+    ChoiceGridOut,
+    DigitGridRequest,
+    DigitGridOut,
 )
 from app.services.template_service import render_answer_card_pdf
+from app.services import choice_grid_service, template_page_service
 
 router = APIRouter(prefix="/templates", tags=["Templates"])
 
@@ -134,6 +143,9 @@ def copy_template(
     new_tpl = AnswerCardTemplate(
         name=payload.name or f"{src.name} 副本",
         subject=src.subject,
+        source_type=src.source_type,
+        orientation=src.orientation,
+        page_sizes=src.page_sizes,
         paper_size=src.paper_size,
         duplex=src.duplex,
         page_count=src.page_count,
@@ -170,7 +182,11 @@ def copy_template(
             partial_score_rules=r.partial_score_rules,
             knowledge_tags=r.knowledge_tags,
             config=r.config,
+            group_key=r.group_key,
+            option_spec=r.option_spec,
         ))
+
+    template_page_service.copy_pages(db, template_id, new_tpl.id)
 
     for a in db.query(ChoiceAnswer).filter(ChoiceAnswer.template_id == template_id).all():
         db.add(ChoiceAnswer(
@@ -310,6 +326,155 @@ def replace_ai_configs(
     )
 
 
+# ---------------- 标注式底图页（上传真实答题卡） ----------------
+
+@router.post("/{template_id}/pages", response_model=TemplatePageUploadResult)
+def upload_template_pages(
+    template_id: UUID,
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("template:update")),
+):
+    """上传真实答题卡（图片 / PDF）作为模板底图。
+
+    PDF 自动读取页数并逐页登记；原图按上传尺寸保存，不做缩放。
+    """
+    tpl = _get_template_or_404(db, template_id)
+    added, pages = template_page_service.upload_pages(db, tpl, files)
+    return TemplatePageUploadResult(
+        added=added,
+        pages=[TemplatePageOut.model_validate(p) for p in pages],
+    )
+
+
+@router.get("/{template_id}/pages", response_model=List[TemplatePageOut])
+def list_template_pages(
+    template_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("template:list")),
+):
+    _get_template_or_404(db, template_id)
+    return template_page_service.list_pages(db, template_id)
+
+
+@router.patch("/{template_id}/pages/{page_index}", response_model=TemplatePageOut)
+def update_template_page(
+    template_id: UUID,
+    page_index: int,
+    payload: TemplatePageUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("template:update")),
+):
+    """人工覆盖底图页的空白页标识。"""
+    tpl = _get_template_or_404(db, template_id)
+    return template_page_service.update_page(db, tpl, page_index, payload.is_blank)
+
+
+@router.delete("/{template_id}/pages/{page_index}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_template_page(
+    template_id: UUID,
+    page_index: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("template:update")),
+):
+    tpl = _get_template_or_404(db, template_id)
+    template_page_service.delete_page(db, tpl, page_index)
+    return None
+
+
+@router.get("/{template_id}/pages/{page_index}/image")
+def get_template_page_image(
+    template_id: UUID,
+    page_index: int,
+    thumb: bool = Query(default=True, description="true 返回画布缩略图，false 返回原图"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("template:list")),
+):
+    _get_template_or_404(db, template_id)
+    data, media = template_page_service.page_image_bytes(db, template_id, page_index, thumb=thumb)
+    return Response(content=data, media_type=media, headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/{template_id}/pages/{page_index}/crop")
+def crop_template_page(
+    template_id: UUID,
+    page_index: int,
+    x: float = Query(...),
+    y: float = Query(...),
+    width: float = Query(...),
+    height: float = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("template:list")),
+):
+    """裁剪预览：按相对坐标返回底图局部，用于核对框选与气泡是否对准。"""
+    _get_template_or_404(db, template_id)
+    data = template_page_service.crop_preview(db, template_id, page_index, x, y, width, height)
+    return Response(content=data, media_type="image/png", headers={"Cache-Control": "no-cache"})
+
+
+# ---------------- 选择题自动切格 ----------------
+
+@router.post("/{template_id}/choice-grid", response_model=ChoiceGridOut)
+def build_choice_grid(
+    template_id: UUID,
+    payload: ChoiceGridRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("template:update")),
+):
+    """把框选出的选择题大区自动切成"一题一区域"，并生成气泡坐标。
+
+    返回的区域尚未入库：前端可先渲染、微调气泡位置，确认后再保存模板。
+    """
+    _get_template_or_404(db, template_id)
+    try:
+        page = template_page_service.get_page(db, template_id, payload.page_index)
+    except HTTPException:
+        page = None
+
+    regions = choice_grid_service.build_choice_grid(
+        {
+            "x": float(payload.x),
+            "y": float(payload.y),
+            "width": float(payload.width),
+            "height": float(payload.height),
+        },
+        page_index=payload.page_index,
+        start_question=payload.start_question,
+        question_count=payload.question_count,
+        options_count=payload.options_count,
+        columns=payload.columns,
+        direction=payload.direction,
+        score=float(payload.score),
+        page_width_px=page.width_px if page else 0,
+        page_height_px=page.height_px if page else 0,
+    )
+    return ChoiceGridOut(regions=[TemplateRegionCreate(**r) for r in regions])
+
+
+@router.post("/{template_id}/digit-grid", response_model=DigitGridOut)
+def build_digit_grid(
+    template_id: UUID,
+    payload: DigitGridRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("template:update")),
+):
+    """为考号区生成填涂格坐标（位数 × 10 行），供真实答题卡精确采样。
+
+    返回的 option_spec 由前端挂到考号区后随模板保存。
+    """
+    _get_template_or_404(db, template_id)
+    spec = choice_grid_service.build_digit_grid(
+        {
+            "x": float(payload.x),
+            "y": float(payload.y),
+            "width": float(payload.width),
+            "height": float(payload.height),
+        },
+        digits=payload.digits,
+    )
+    return DigitGridOut(option_spec=spec)
+
+
 # ---------------- 导出与备份 ----------------
 
 @router.get("/{template_id}/export-pdf")
@@ -321,7 +486,11 @@ def export_answer_card_pdf(
 ):
     tpl = _get_template_or_404(db, template_id)
     regions = db.query(TemplateRegion).filter(TemplateRegion.template_id == template_id).all()
-    pdf_bytes = render_answer_card_pdf(tpl, regions, watermark=watermark)
+    if tpl.source_type == "annotated":
+        # 标注式模板：直接以底图页合成为 PDF，保留原始版面
+        pdf_bytes = template_page_service.render_annotated_pdf(db, tpl)
+    else:
+        pdf_bytes = render_answer_card_pdf(tpl, regions, watermark=watermark)
     filename = f"answer_card_{template_id}.pdf"
     return Response(
         content=pdf_bytes,

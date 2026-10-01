@@ -3,7 +3,10 @@
     <div class="toolbar">
       <div class="title">
         <h2>{{ tpl.name || '答题卡模板' }}</h2>
-        <el-tag size="small">{{ tpl.paper_size }}</el-tag>
+        <el-tag size="small" :type="isAnnotated ? 'success' : 'info'">
+          {{ isAnnotated ? '原版答题卡标注' : '系统生成卡面' }}
+        </el-tag>
+        <el-tag v-if="!isAnnotated" size="small">{{ tpl.paper_size }}</el-tag>
         <el-tag size="small" :type="tpl.duplex ? 'warning' : 'info'">{{ tpl.duplex ? '双面' : '单面' }}</el-tag>
       </div>
       <div>
@@ -18,40 +21,75 @@
       <!-- ---------------- 设计器 ---------------- -->
       <el-tab-pane label="答题卡设计" name="design">
         <div class="design-tab">
-          <!-- 左侧：基本设置 -->
+          <!-- 左侧：基本设置与底图 -->
           <aside class="side left">
-            <h3>基本设置</h3>
+            <h3>模板信息</h3>
             <el-form label-width="82px" size="small">
               <el-form-item label="模板名称"><el-input v-model="tpl.name" /></el-form-item>
               <el-form-item label="学科"><el-input v-model="tpl.subject" /></el-form-item>
               <el-form-item label="卡面标题"><el-input v-model="tpl.title" /></el-form-item>
-              <el-form-item label="纸张大小">
-                <el-radio-group v-model="tpl.paper_size">
-                  <el-radio-button value="A4">A4</el-radio-button>
-                  <el-radio-button value="A3">A3</el-radio-button>
-                </el-radio-group>
-              </el-form-item>
-              <el-form-item label="印刷方式">
-                <el-radio-group v-model="tpl.duplex">
-                  <el-radio-button :value="false">单面</el-radio-button>
-                  <el-radio-button :value="true">双面</el-radio-button>
-                </el-radio-group>
-              </el-form-item>
-              <el-form-item label="页数">
-                <el-input-number v-model="tpl.page_count" :min="1" :max="8" style="width: 100%" />
-              </el-form-item>
-              <el-form-item label="页边距(mm)">
-                <div class="margins">
-                  <el-input-number v-model="tpl.margin_top" :min="0" :max="50" controls-position="right" />
-                  <el-input-number v-model="tpl.margin_bottom" :min="0" :max="50" controls-position="right" />
-                  <el-input-number v-model="tpl.margin_left" :min="0" :max="50" controls-position="right" />
-                  <el-input-number v-model="tpl.margin_right" :min="0" :max="50" controls-position="right" />
-                  <span class="margins-tip">上 / 下 / 左 / 右</span>
-                </div>
-              </el-form-item>
+              <template v-if="!isAnnotated">
+                <el-form-item label="纸张大小">
+                  <el-radio-group v-model="tpl.paper_size">
+                    <el-radio-button value="A4">A4</el-radio-button>
+                    <el-radio-button value="A3">A3</el-radio-button>
+                  </el-radio-group>
+                </el-form-item>
+                <el-form-item label="印刷方式">
+                  <el-radio-group v-model="tpl.duplex">
+                    <el-radio-button :value="false">单面</el-radio-button>
+                    <el-radio-button :value="true">双面</el-radio-button>
+                  </el-radio-group>
+                </el-form-item>
+              </template>
             </el-form>
 
-            <h3>考号与姓名</h3>
+            <h3>原版答题卡底图</h3>
+            <p class="tip">
+              上传真实答题卡（图片或 PDF）。PDF 自动读取页数并逐页登记，空白页自动标识；
+              原图按上传尺寸原样保存，不做缩放。
+            </p>
+            <el-upload
+              :show-file-list="false"
+              multiple
+              :before-upload="beforeUploadBase"
+              :http-request="handleBaseUpload"
+              accept="image/*,.pdf"
+            >
+              <el-button size="small" type="primary" :loading="uploading">上传答题卡（可多选 / PDF）</el-button>
+            </el-upload>
+
+            <div v-if="pages.length" class="page-cards">
+              <div
+                v-for="(p, i) in pages"
+                :key="p.id"
+                class="page-card"
+                :class="{ active: i === activePageIdx }"
+                @click="activePageIdx = i"
+              >
+                <div class="page-card-head">
+                  <span>第 {{ p.page_index + 1 }} 页</span>
+                  <el-tag size="small" :type="p.is_blank ? 'warning' : 'success'">
+                    {{ p.is_blank ? '空白页' : '有效页' }}
+                  </el-tag>
+                </div>
+                <div class="page-card-meta">
+                  {{ p.orientation === 'landscape' ? '横向' : '纵向' }} · {{ p.width_px }}×{{ p.height_px }}px
+                </div>
+                <div class="page-card-actions" @click.stop>
+                  <el-switch
+                    v-model="p.is_blank"
+                    size="small"
+                    active-text="空白"
+                    @change="(v: boolean) => toggleBlank(p, v)"
+                  />
+                  <el-icon class="del" @click="removePage(p)"><Delete /></el-icon>
+                </div>
+              </div>
+            </div>
+            <p v-else class="tip">尚未上传底图，可先上传原版答题卡再进行框选。</p>
+
+            <h3>识别与预处理</h3>
             <el-form label-width="82px" size="small">
               <el-form-item label="考号位数">
                 <el-input-number v-model="tpl.exam_number_digits" :min="4" :max="16" style="width: 100%" />
@@ -62,16 +100,8 @@
                   <el-radio-button value="ocr">手写 OCR</el-radio-button>
                 </el-radio-group>
               </el-form-item>
-              <el-form-item label="班级前缀">
-                <el-switch v-model="tpl.class_prefix_enabled" />
-              </el-form-item>
-              <el-form-item label="姓名 OCR">
-                <el-switch v-model="tpl.name_ocr_enabled" />
-              </el-form-item>
-            </el-form>
-
-            <h3>图像预处理</h3>
-            <el-form label-width="82px" size="small">
+              <el-form-item label="班级前缀"><el-switch v-model="tpl.class_prefix_enabled" /></el-form-item>
+              <el-form-item label="姓名 OCR"><el-switch v-model="tpl.name_ocr_enabled" /></el-form-item>
               <el-form-item label="倾斜阈值">
                 <el-input-number v-model="tpl.tilt_threshold" :min="0" :max="45" style="width: 100%" />
               </el-form-item>
@@ -79,17 +109,19 @@
               <el-form-item label="自动纠偏"><el-switch v-model="tpl.deskew_enabled" /></el-form-item>
             </el-form>
 
-            <h3>样卷框选（可选）</h3>
-            <p class="tip">上传真实答题卡图片作为底图，便于精准框选区域。样卷仅本地预览，不会上传服务器。</p>
-            <el-upload
-              :show-file-list="false"
-              :before-upload="beforeUploadSample"
-              :http-request="handleSample"
-              accept="image/*"
-            >
-              <el-button size="small">上传样卷图片（第 {{ currentPage + 1 }} 页）</el-button>
-            </el-upload>
-            <el-button v-if="bgImage" size="small" type="danger" plain @click="clearSample">清除底图</el-button>
+            <template v-if="!isAnnotated">
+              <h3>本地样卷（仅预览）</h3>
+              <p class="tip">未上传底图时，可临时载入一张本地样卷图片辅助框选，不会上传服务器。</p>
+              <el-upload
+                :show-file-list="false"
+                :before-upload="beforeUploadSample"
+                :http-request="handleSample"
+                accept="image/*"
+              >
+                <el-button size="small">载入本地样卷图片</el-button>
+              </el-upload>
+              <el-button v-if="localSample" size="small" type="danger" plain @click="clearSample">清除本地样卷</el-button>
+            </template>
           </aside>
 
           <!-- 中间：画布 -->
@@ -102,11 +134,14 @@
                 <el-radio-button value="choice">选择题区</el-radio-button>
                 <el-radio-button value="subjective">非选择题框</el-radio-button>
               </el-radio-group>
-              <div class="page-nav" v-if="tpl.page_count > 1">
-                <el-button size="small" :disabled="currentPage === 0" @click="currentPage--">上一页</el-button>
-                <span>第 {{ currentPage + 1 }} / {{ tpl.page_count }} 页</span>
-                <el-button size="small" :disabled="currentPage >= tpl.page_count - 1" @click="currentPage++">下一页</el-button>
+              <div class="page-nav" v-if="pages.length > 1">
+                <el-button size="small" :disabled="activePageIdx === 0" @click="activePageIdx--">上一页</el-button>
+                <span>第 {{ activePageIdx + 1 }} / {{ pages.length }} 页</span>
+                <el-button size="small" :disabled="activePageIdx >= pages.length - 1" @click="activePageIdx++">下一页</el-button>
               </div>
+              <span v-if="currentPageMeta" class="tip">
+                底图原始尺寸 {{ currentPageMeta.width_px }}×{{ currentPageMeta.height_px }}px（画布按比例显示，坐标与分辨率无关）
+              </span>
             </div>
 
             <div
@@ -115,8 +150,8 @@
               :style="canvasStyle"
               @mousedown="onCanvasMouseDown"
             >
-              <img v-if="bgImage" :src="bgImage" class="bg" alt="样卷底图" />
-              <div class="margin-guide" :style="marginStyle"></div>
+              <img v-if="bgImage" :src="bgImage" class="bg" alt="答题卡底图" />
+              <div v-if="!isAnnotated" class="margin-guide" :style="marginStyle"></div>
               <div
                 v-for="item in pageRegions"
                 :key="item.i"
@@ -126,9 +161,12 @@
                 @mousedown.stop="onRegionMouseDown($event, item.i)"
               >
                 <span class="region-label">{{ regionLabel(item.r) }}</span>
-                <template v-if="item.r.region_type === 'choice'">
-                  <span v-for="(l, k) in optionLetters(item.r)" :key="k" class="bubble">{{ l }}</span>
-                </template>
+                <span
+                  v-for="(m, k) in regionMarkers(item.r)"
+                  :key="k"
+                  class="marker"
+                  :style="{ left: `${m.left}px`, top: `${m.top}px`, width: `${m.size}px`, height: `${m.size}px` }"
+                >{{ m.label }}</span>
                 <span
                   v-if="item.i === selectedIndex"
                   class="handle"
@@ -136,7 +174,10 @@
                 ></span>
               </div>
             </div>
-            <p class="tip">按住拖拽绘制「{{ drawTypeText }}」；点击区域可整体移动，拖动右下角小方块可缩放。</p>
+            <p class="tip">
+              按住拖拽绘制「{{ drawTypeText }}」；点击区域可整体移动，拖动右下角小方块可缩放。
+              选择题 / 考号区框选后会弹出切格设置，自动生成气泡坐标。
+            </p>
           </section>
 
           <!-- 右侧：区域属性 -->
@@ -148,14 +189,18 @@
                   <el-tag>{{ regionTypeText(selectedRegion.region_type) }}</el-tag>
                 </el-form-item>
                 <el-form-item v-if="selectedRegion.region_type !== 'name'" label="题号">
-                  <el-input v-model="selectedRegion.question_number" @input="onQuestionNumberInput(selectedRegion)" />
+                  <el-input v-model="selectedRegion.question_number" />
                 </el-form-item>
                 <el-form-item v-if="selectedRegion.region_type === 'subjective'" label="子题号">
-                  <el-input v-model="selectedRegion.sub_question_number" />
+                  <el-input v-model="selectedRegion.sub_question_number" placeholder="如 (1)" />
+                </el-form-item>
+                <el-form-item v-if="selectedRegion.region_type === 'subjective'" label="题块组">
+                  <el-input v-model="selectedRegion.group_key" placeholder="同一题跨区域时填写相同值，如 17" />
                 </el-form-item>
                 <el-form-item v-if="selectedRegion.region_type !== 'name'" label="分值">
                   <el-input-number v-model="selectedRegion.max_score" :min="0" :step="0.5" style="width: 100%" />
                 </el-form-item>
+
                 <template v-if="selectedRegion.region_type === 'choice'">
                   <el-form-item label="选项数">
                     <el-input-number v-model="selectedRegion.options_count" :min="2" :max="10" style="width: 100%" />
@@ -164,10 +209,23 @@
                   <el-form-item label="标准答案">
                     <el-input v-model="choiceAnswerMap[selectedRegion.question_number || '']" placeholder="如 A / ABD" />
                   </el-form-item>
+                  <el-form-item label="切格">
+                    <el-button size="small" @click="openChoiceGrid(selectedIndex)">重新生成题目网格</el-button>
+                  </el-form-item>
                 </template>
-                <el-form-item v-if="selectedRegion.region_type === 'exam_number'" label="填涂位数">
-                  <el-input-number v-model="tpl.exam_number_digits" :min="4" :max="16" style="width: 100%" />
+
+                <template v-if="selectedRegion.region_type === 'exam_number'">
+                  <el-form-item label="填涂格">
+                    <el-button size="small" @click="openDigitGrid(selectedIndex)">
+                      {{ hasDigitSpec(selectedRegion) ? '重新生成填涂格' : '生成填涂格' }}
+                    </el-button>
+                  </el-form-item>
+                </template>
+
+                <el-form-item v-if="hasOptionSpec(selectedRegion)" label="对齐">
+                  <el-button size="small" type="primary" plain @click="openTune(selectedIndex)">气泡对齐微调</el-button>
                 </el-form-item>
+
                 <el-form-item label="知识点">
                   <el-select
                     v-model="selectedRegion.knowledge_tags"
@@ -184,7 +242,7 @@
             </div>
             <p v-else class="tip">点击画布中的区域以编辑属性。</p>
 
-            <h3>区域列表（共 {{ pageRegions.length }} 个）</h3>
+            <h3>区域列表（本页 {{ pageRegions.length }} 个 / 共 {{ regions.length }} 个）</h3>
             <ul class="region-list">
               <li
                 v-for="item in pageRegions"
@@ -212,6 +270,87 @@
       </el-tab-pane>
     </el-tabs>
 
+    <!-- 选择题切格设置 -->
+    <el-dialog v-model="choiceGridVisible" title="选择题自动切格" width="520px">
+      <p class="tip">
+        把刚框选的大区按「题数 × 选项数 × 栏数」自动切成一题一区域，并生成气泡坐标，
+        用于后续 OMR 自动判分。取消则保留为单个区域。
+      </p>
+      <el-form label-width="90px" size="small">
+        <el-form-item label="起始题号">
+          <el-input-number v-model="choiceForm.start_question" :min="1" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="题目数量">
+          <el-input-number v-model="choiceForm.question_count" :min="1" :max="200" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="每题选项数">
+          <el-input-number v-model="choiceForm.options_count" :min="2" :max="10" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="栏数">
+          <el-input-number v-model="choiceForm.columns" :min="1" :max="8" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="排列方向">
+          <el-radio-group v-model="choiceForm.direction">
+            <el-radio-button value="horizontal">横向（选项左右排列）</el-radio-button>
+            <el-radio-button value="vertical">纵向（选项上下排列）</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="每题分值">
+          <el-input-number v-model="choiceForm.score" :min="0" :step="0.5" style="width: 100%" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="cancelChoiceGrid">保留为单区域</el-button>
+        <el-button type="primary" :loading="gridBusy" @click="confirmChoiceGrid">生成网格</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 考号填涂格设置 -->
+    <el-dialog v-model="digitGridVisible" title="考号区填涂格" width="460px">
+      <p class="tip">按考号位数生成「位数 × 10 行（0~9）」的填涂格坐标，用于精确识别学生填涂的考号。</p>
+      <el-form label-width="90px" size="small">
+        <el-form-item label="考号位数">
+          <el-input-number v-model="digitForm.digits" :min="4" :max="16" style="width: 100%" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="digitGridVisible = false">取消</el-button>
+        <el-button type="primary" :loading="gridBusy" @click="confirmDigitGrid">生成填涂格</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 气泡对齐微调 -->
+    <el-dialog v-model="tuneVisible" title="气泡对齐微调" width="560px">
+      <p class="tip">下方为该区域在底图上的实际裁剪。若圆点未对准气泡，用按钮整体平移 / 缩放对齐。</p>
+      <div class="tune-stage" :style="{ width: `${tuneBox.w}px`, height: `${tuneBox.h}px` }">
+        <img v-if="tuneCropUrl" :src="tuneCropUrl" class="tune-img" alt="区域裁剪" />
+        <span
+          v-for="(m, k) in tuneMarkers"
+          :key="k"
+          class="marker tune-marker"
+          :style="{ left: `${m.left}px`, top: `${m.top}px`, width: `${m.size}px`, height: `${m.size}px` }"
+        >{{ m.label }}</span>
+      </div>
+      <div class="tune-controls">
+        <div class="tune-group">
+          <span>平移</span>
+          <el-button size="small" @click="nudge(-5, 0)">←</el-button>
+          <el-button size="small" @click="nudge(5, 0)">→</el-button>
+          <el-button size="small" @click="nudge(0, -5)">↑</el-button>
+          <el-button size="small" @click="nudge(0, 5)">↓</el-button>
+        </div>
+        <div class="tune-group">
+          <span>缩放</span>
+          <el-button size="small" @click="scaleSpec(0.95)">缩小</el-button>
+          <el-button size="small" @click="scaleSpec(1.05)">放大</el-button>
+        </div>
+        <el-button size="small" type="warning" plain @click="resetTune">还原</el-button>
+      </div>
+      <template #footer>
+        <el-button @click="tuneVisible = false">完成</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="precheckVisible" title="模板预校验结果" width="620px">
       <div v-if="precheckResult" class="precheck">
         <el-alert
@@ -238,7 +377,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete } from '@element-plus/icons-vue'
 import {
   getTemplate,
@@ -248,8 +387,17 @@ import {
   replaceChoiceAnswers,
   exportTemplatePdf,
   precheckTemplate,
+  uploadTemplatePages,
+  getTemplatePages,
+  updateTemplatePage,
+  deleteTemplatePage,
+  getTemplatePageImageUrl,
+  getTemplatePageCropUrl,
+  buildChoiceGrid,
+  buildDigitGrid,
   type RegionType,
   type TemplateRegion,
+  type TemplatePage,
   type PrecheckResult,
 } from '@/api/templates'
 import ChoiceAnswerPanel from './components/ChoiceAnswerPanel.vue'
@@ -261,7 +409,9 @@ const templateId = route.params.id as string
 
 const loading = ref(false)
 const saving = ref(false)
+const uploading = ref(false)
 const prechecking = ref(false)
+const gridBusy = ref(false)
 const precheckVisible = ref(false)
 const precheckResult = ref<PrecheckResult | null>(null)
 const activeTab = ref('design')
@@ -270,6 +420,7 @@ const tpl = reactive({
   name: '',
   subject: '',
   title: '答题卡',
+  source_type: 'generated' as 'generated' | 'annotated',
   paper_size: 'A4' as 'A3' | 'A4',
   duplex: false,
   page_count: 1,
@@ -287,21 +438,36 @@ const tpl = reactive({
   description: '',
 })
 
+const isAnnotated = computed(() => tpl.source_type === 'annotated' || pages.value.length > 0)
+
 const regions = ref<TemplateRegion[]>([])
-const currentPage = ref(0)
 const drawType = ref<RegionType | ''>('')
 const selectedIndex = ref(-1)
 
-const bgImages = reactive<Record<number, string>>({})
-const bgImage = computed(() => bgImages[currentPage.value] || '')
+// ---------- 底图页 ----------
+const pages = ref<TemplatePage[]>([])
+const pageImages = reactive<Record<number, string>>({})
+const activePageIdx = ref(0)
+const currentPageMeta = computed<TemplatePage | null>(() => pages.value[activePageIdx.value] || null)
+const currentPage = computed(() => currentPageMeta.value?.page_index ?? 0)
+
+const localSamples = reactive<Record<number, string>>({})
+const localSample = computed(() => localSamples[currentPage.value] || '')
+
+const bgImage = computed(() => pageImages[currentPage.value] || localSample.value)
 
 const choiceAnswerMap = reactive<Record<string, string>>({})
 
 // ---------- 画布尺寸 ----------
-const CANVAS_WIDTH = 560
+const CANVAS_WIDTH = 620
 const PAGE_MM = { A4: { w: 210, h: 297 }, A3: { w: 297, h: 420 } }
 const paperMm = computed(() => PAGE_MM[tpl.paper_size])
-const canvasHeight = computed(() => Math.round((CANVAS_WIDTH * paperMm.value.h) / paperMm.value.w))
+const pageRatio = computed(() => {
+  const p = currentPageMeta.value
+  if (p && p.width_px && p.height_px) return p.height_px / p.width_px
+  return paperMm.value.h / paperMm.value.w
+})
+const canvasHeight = computed(() => Math.max(240, Math.round(CANVAS_WIDTH * pageRatio.value)))
 const canvasStyle = computed(() => ({
   width: `${CANVAS_WIDTH}px`,
   height: `${canvasHeight.value}px`,
@@ -335,11 +501,6 @@ function regionStyle(r: TemplateRegion) {
   }
 }
 
-function optionLetters(r: TemplateRegion) {
-  const n = Math.min(r.options_count || 4, 6)
-  return Array.from({ length: n }, (_, i) => String.fromCharCode(65 + i))
-}
-
 const REGION_TEXT: Record<string, string> = {
   exam_number: '考号区',
   name: '姓名区',
@@ -353,9 +514,61 @@ function regionLabel(r: TemplateRegion) {
   const base = REGION_TEXT[r.region_type] || r.region_type
   if (!r.question_number) return base
   const sub = r.sub_question_number ? `-${r.sub_question_number}` : ''
-  return `${base} ${r.question_number}${sub}`
+  const grouped = r.group_key ? `〔组${r.group_key}〕` : ''
+  return `${base} ${r.question_number}${sub}${grouped}`
 }
 const drawTypeText = computed(() => (drawType.value ? regionTypeText(drawType.value) : '区域'))
+
+// ---------- 气泡 / 填涂格标记 ----------
+interface Marker {
+  left: number
+  top: number
+  size: number
+  label: string
+}
+function buildMarkers(r: TemplateRegion, rw: number, rh: number): Marker[] {
+  const spec = r.option_spec
+  if (!spec || typeof spec !== 'object') return []
+  const out: Marker[] = []
+  if (Array.isArray(spec.bubbles)) {
+    const rad = Math.max(2, Number(spec.radius || 0.05) * rh)
+    for (const b of spec.bubbles) {
+      out.push({
+        left: (Number(b.cx) / 1000) * rw,
+        top: (Number(b.cy) / 1000) * rh,
+        size: rad * 2,
+        label: String(b.label ?? ''),
+      })
+    }
+    return out
+  }
+  if (spec.kind === 'digit' && Array.isArray(spec.columns) && Array.isArray(spec.rows)) {
+    const rad = Math.max(1.5, Number(spec.radius || 0.02) * rh)
+    for (const c of spec.columns) {
+      for (const y of spec.rows) {
+        out.push({
+          left: (Number(c) / 1000) * rw,
+          top: (Number(y) / 1000) * rh,
+          size: rad * 2,
+          label: '',
+        })
+      }
+    }
+  }
+  return out
+}
+function regionMarkers(r: TemplateRegion): Marker[] {
+  const rw = (r.width / 1000) * CANVAS_WIDTH
+  const rh = (r.height / 1000) * canvasHeight.value
+  return buildMarkers(r, rw, rh)
+}
+function hasOptionSpec(r: TemplateRegion) {
+  const spec = r.option_spec
+  return !!spec && (Array.isArray(spec.bubbles) || spec.kind === 'digit')
+}
+function hasDigitSpec(r: TemplateRegion) {
+  return !!r.option_spec && r.option_spec.kind === 'digit'
+}
 
 // ---------- 坐标换算 ----------
 function clamp(v: number, min: number, max: number) {
@@ -385,13 +598,8 @@ function removeListeners() {
   window.removeEventListener('mouseup', onWindowMouseUp)
 }
 
-function onCanvasMouseDown(e: MouseEvent) {
-  const type = drawType.value
-  if (!type) return
-  const rel = toRel(e)
-  startRel = rel
-  dragMode = 'draw'
-  regions.value.push({
+function newRegion(type: RegionType, rel: { x: number; y: number }): TemplateRegion {
+  return {
     page_index: currentPage.value,
     region_type: type,
     question_number: '',
@@ -406,7 +614,18 @@ function onCanvasMouseDown(e: MouseEvent) {
     knowledge_tags: [],
     partial_score_rules: null,
     config: null,
-  })
+    group_key: null,
+    option_spec: null,
+  }
+}
+
+function onCanvasMouseDown(e: MouseEvent) {
+  const type = drawType.value
+  if (!type) return
+  const rel = toRel(e)
+  startRel = rel
+  dragMode = 'draw'
+  regions.value.push(newRegion(type, rel))
   selectedIndex.value = regions.value.length - 1
   addListeners()
 }
@@ -451,12 +670,19 @@ function onWindowMouseMove(e: MouseEvent) {
 
 function onWindowMouseUp() {
   if (dragMode === 'draw') {
-    const r = regions.value[selectedIndex.value]
+    const idx = selectedIndex.value
+    const r = regions.value[idx]
     if (r && (r.width < 8 || r.height < 8)) {
-      regions.value.splice(selectedIndex.value, 1)
+      regions.value.splice(idx, 1)
       selectedIndex.value = -1
     } else if (r) {
-      autoNumber(r)
+      if (r.region_type === 'choice') {
+        openChoiceGrid(idx)
+      } else if (r.region_type === 'exam_number') {
+        openDigitGrid(idx)
+      } else {
+        autoNumber(r)
+      }
     }
   }
   dragMode = 'none'
@@ -477,15 +703,239 @@ function removeRegion(index: number) {
   selectedIndex.value = -1
 }
 
-function onQuestionNumberInput(r: TemplateRegion) {
-  // 选择题区域题号变化时，同步标准答案映射
-  const key = r.question_number || ''
-  if (r.region_type === 'choice' && key && !(key in choiceAnswerMap)) {
-    choiceAnswerMap[key] = ''
+// ---------- 选择题切格 ----------
+const choiceGridVisible = ref(false)
+const choiceGridIndex = ref(-1)
+const choiceForm = reactive({
+  start_question: 1,
+  question_count: 10,
+  options_count: 4,
+  columns: 1,
+  direction: 'horizontal' as 'horizontal' | 'vertical',
+  score: 0,
+})
+
+function nextChoiceQuestion(): number {
+  const nums = regions.value
+    .filter((x) => x.region_type === 'choice' && /^\d+$/.test(x.question_number || ''))
+    .map((x) => parseInt(x.question_number as string, 10))
+  return nums.length ? Math.max(...nums) + 1 : 1
+}
+
+function openChoiceGrid(index: number) {
+  choiceGridIndex.value = index
+  choiceForm.start_question = nextChoiceQuestion()
+  choiceForm.question_count = 10
+  choiceForm.options_count = 4
+  choiceForm.columns = 1
+  choiceForm.direction = 'horizontal'
+  choiceForm.score = 0
+  choiceGridVisible.value = true
+}
+
+function cancelChoiceGrid() {
+  const r = regions.value[choiceGridIndex.value]
+  if (r) autoNumber(r)
+  choiceGridVisible.value = false
+}
+
+async function confirmChoiceGrid() {
+  const r = regions.value[choiceGridIndex.value]
+  if (!r) return
+  gridBusy.value = true
+  try {
+    const res = await buildChoiceGrid(templateId, {
+      page_index: r.page_index,
+      x: r.x,
+      y: r.y,
+      width: r.width,
+      height: r.height,
+      start_question: choiceForm.start_question,
+      question_count: choiceForm.question_count,
+      options_count: choiceForm.options_count,
+      columns: choiceForm.columns,
+      direction: choiceForm.direction,
+      score: choiceForm.score,
+    })
+    const generated = res.data.regions.map((x) => ({
+      ...x,
+      question_number: x.question_number ?? '',
+      sub_question_number: x.sub_question_number ?? '',
+      knowledge_tags: x.knowledge_tags || [],
+    }))
+    for (const g of generated) {
+      const q = g.question_number || ''
+      if (q && !(q in choiceAnswerMap)) choiceAnswerMap[q] = ''
+    }
+    regions.value.splice(choiceGridIndex.value, 1, ...generated)
+    selectedIndex.value = -1
+    choiceGridVisible.value = false
+    ElMessage.success(`已生成 ${generated.length} 道选择题区域`)
+  } finally {
+    gridBusy.value = false
   }
 }
 
-// ---------- 样卷底图 ----------
+// ---------- 考号填涂格 ----------
+const digitGridVisible = ref(false)
+const digitGridIndex = ref(-1)
+const digitForm = reactive({ digits: 9 })
+
+function openDigitGrid(index: number) {
+  digitGridIndex.value = index
+  digitForm.digits = Number(tpl.exam_number_digits) || 9
+  digitGridVisible.value = true
+}
+
+async function confirmDigitGrid() {
+  const r = regions.value[digitGridIndex.value]
+  if (!r) return
+  gridBusy.value = true
+  try {
+    const res = await buildDigitGrid(templateId, {
+      page_index: r.page_index,
+      x: r.x,
+      y: r.y,
+      width: r.width,
+      height: r.height,
+      digits: digitForm.digits,
+    })
+    r.option_spec = res.data.option_spec
+    tpl.exam_number_digits = digitForm.digits
+    digitGridVisible.value = false
+    ElMessage.success('已生成考号填涂格')
+  } finally {
+    gridBusy.value = false
+  }
+}
+
+// ---------- 气泡对齐微调 ----------
+const TUNE_WIDTH = 480
+const tuneVisible = ref(false)
+const tuneIndex = ref(-1)
+const tuneCropUrl = ref('')
+const tuneOrigin = ref<Record<string, any> | null>(null)
+
+const tuneRegion = computed(() => (tuneIndex.value >= 0 ? regions.value[tuneIndex.value] : null))
+const tuneBox = computed(() => {
+  const r = tuneRegion.value
+  const p = currentPageMeta.value
+  if (!r || !p || !r.width) return { w: TUNE_WIDTH, h: 200 }
+  const rpxW = (r.width / 1000) * p.width_px
+  const rpxH = (r.height / 1000) * p.height_px
+  const h = rpxW > 0 ? Math.round((TUNE_WIDTH * rpxH) / rpxW) : 200
+  return { w: TUNE_WIDTH, h: Math.max(60, h) }
+})
+const tuneMarkers = computed<Marker[]>(() => {
+  const r = tuneRegion.value
+  if (!r) return []
+  return buildMarkers(r, tuneBox.value.w, tuneBox.value.h)
+})
+
+async function openTune(index: number) {
+  const r = regions.value[index]
+  if (!r) return
+  tuneIndex.value = index
+  tuneOrigin.value = r.option_spec ? JSON.parse(JSON.stringify(r.option_spec)) : null
+  tuneCropUrl.value = ''
+  tuneVisible.value = true
+  tuneCropUrl.value = await getTemplatePageCropUrl(templateId, r.page_index, {
+    x: r.x,
+    y: r.y,
+    width: r.width,
+    height: r.height,
+  })
+}
+
+function nudge(dx: number, dy: number) {
+  const r = tuneRegion.value
+  if (!r || !r.option_spec) return
+  const spec = JSON.parse(JSON.stringify(r.option_spec))
+  if (Array.isArray(spec.bubbles)) {
+    spec.bubbles.forEach((b: any) => {
+      b.cx = clamp(Number(b.cx) + dx, 0, 1000)
+      b.cy = clamp(Number(b.cy) + dy, 0, 1000)
+    })
+  }
+  if (Array.isArray(spec.columns)) spec.columns = spec.columns.map((c: number) => clamp(c + dx, 0, 1000))
+  if (Array.isArray(spec.rows)) spec.rows = spec.rows.map((y: number) => clamp(y + dy, 0, 1000))
+  r.option_spec = spec
+}
+
+function scaleSpec(factor: number) {
+  const r = tuneRegion.value
+  if (!r || !r.option_spec) return
+  const spec = JSON.parse(JSON.stringify(r.option_spec))
+  const scaleArr = (arr: number[]) => {
+    const c = arr.reduce((a, b) => a + b, 0) / arr.length
+    return arr.map((v) => clamp(c + (v - c) * factor, 0, 1000))
+  }
+  if (Array.isArray(spec.bubbles)) {
+    const xs = spec.bubbles.map((b: any) => Number(b.cx))
+    const ys = spec.bubbles.map((b: any) => Number(b.cy))
+    const sx = scaleArr(xs)
+    const sy = scaleArr(ys)
+    spec.bubbles.forEach((b: any, i: number) => {
+      b.cx = sx[i]
+      b.cy = sy[i]
+    })
+  }
+  if (Array.isArray(spec.columns)) spec.columns = scaleArr(spec.columns)
+  if (Array.isArray(spec.rows)) spec.rows = scaleArr(spec.rows)
+  if (spec.radius) spec.radius = Math.min(0.5, Number(spec.radius) * factor)
+  r.option_spec = spec
+}
+
+function resetTune() {
+  const r = tuneRegion.value
+  if (r && tuneOrigin.value) r.option_spec = JSON.parse(JSON.stringify(tuneOrigin.value))
+}
+
+// ---------- 底图页上传与管理 ----------
+function beforeUploadBase(file: File) {
+  const name = file.name.toLowerCase()
+  const ok = file.type.startsWith('image/') || name.endsWith('.pdf')
+  if (!ok) {
+    ElMessage.error('仅支持图片或 PDF 答题卡')
+    return false
+  }
+  return true
+}
+
+async function handleBaseUpload(options: any) {
+  uploading.value = true
+  try {
+    const res = await uploadTemplatePages(templateId, [options.file])
+    const added = res.data.pages
+    if (added.length) {
+      ElMessage.success(`已添加 ${added.length} 页底图`)
+      await reloadAfterPageChange()
+    }
+  } finally {
+    uploading.value = false
+  }
+}
+
+async function toggleBlank(p: TemplatePage, value: boolean) {
+  await updateTemplatePage(templateId, p.page_index, value)
+  p.is_blank = value
+  ElMessage.success(value ? '已标记为空白页' : '已标记为有效页')
+}
+
+async function removePage(p: TemplatePage) {
+  await ElMessageBox.confirm(`确定删除第 ${p.page_index + 1} 页底图吗？（该页已框选的区域需自行清理）`, '提示', {
+    type: 'warning',
+  })
+  await deleteTemplatePage(templateId, p.page_index)
+  await reloadAfterPageChange()
+}
+
+async function reloadAfterPageChange() {
+  await loadPages(true)
+  await refreshTemplate()
+}
+
+// ---------- 本地样卷 ----------
 function beforeUploadSample(file: File) {
   if (!file.type.startsWith('image/')) {
     ElMessage.error('请上传图片格式的样卷')
@@ -494,52 +944,74 @@ function beforeUploadSample(file: File) {
   return true
 }
 function handleSample(options: any) {
-  bgImages[currentPage.value] = URL.createObjectURL(options.file)
+  localSamples[currentPage.value] = URL.createObjectURL(options.file)
 }
-
 function clearSample() {
-  const url = bgImages[currentPage.value]
+  const url = localSamples[currentPage.value]
   if (url) URL.revokeObjectURL(url)
-  delete bgImages[currentPage.value]
+  delete localSamples[currentPage.value]
 }
 
 // ---------- 数据加载与保存 ----------
+async function refreshTemplate() {
+  const d = (await getTemplate(templateId)).data
+  Object.assign(tpl, {
+    name: d.name,
+    subject: d.subject || '',
+    title: d.title,
+    source_type: d.source_type || 'generated',
+    paper_size: d.paper_size,
+    duplex: d.duplex,
+    page_count: d.page_count,
+    margin_top: Number(d.margin_top),
+    margin_bottom: Number(d.margin_bottom),
+    margin_left: Number(d.margin_left),
+    margin_right: Number(d.margin_right),
+    exam_number_digits: d.exam_number_digits,
+    exam_number_mode: d.exam_number_mode,
+    class_prefix_enabled: d.class_prefix_enabled,
+    name_ocr_enabled: d.name_ocr_enabled,
+    tilt_threshold: Number(d.tilt_threshold),
+    perspective_enabled: d.perspective_enabled,
+    deskew_enabled: d.deskew_enabled,
+    description: d.description || '',
+  })
+  regions.value = (d.regions || []).map((r) => ({
+    ...r,
+    page_index: Number(r.page_index),
+    x: Number(r.x),
+    y: Number(r.y),
+    width: Number(r.width),
+    height: Number(r.height),
+    max_score: Number(r.max_score),
+    options_count: Number(r.options_count),
+    knowledge_tags: r.knowledge_tags || [],
+    group_key: r.group_key ?? null,
+    option_spec: r.option_spec ?? null,
+  }))
+  return d
+}
+
+async function loadPages(force = false) {
+  const res = await getTemplatePages(templateId)
+  pages.value = res.data
+  if (force) {
+    Object.values(pageImages).forEach((u) => URL.revokeObjectURL(u))
+    Object.keys(pageImages).forEach((k) => delete pageImages[Number(k)])
+  }
+  if (activePageIdx.value >= pages.value.length) activePageIdx.value = 0
+  for (const p of pages.value) {
+    if (!pageImages[p.page_index]) {
+      pageImages[p.page_index] = await getTemplatePageImageUrl(templateId, p.page_index, true)
+    }
+  }
+}
+
 async function load() {
   loading.value = true
   try {
-    const [tplRes, choiceRes] = await Promise.all([getTemplate(templateId), getChoiceAnswers(templateId)])
-    const d = tplRes.data
-    Object.assign(tpl, {
-      name: d.name,
-      subject: d.subject || '',
-      title: d.title,
-      paper_size: d.paper_size,
-      duplex: d.duplex,
-      page_count: d.page_count,
-      margin_top: Number(d.margin_top),
-      margin_bottom: Number(d.margin_bottom),
-      margin_left: Number(d.margin_left),
-      margin_right: Number(d.margin_right),
-      exam_number_digits: d.exam_number_digits,
-      exam_number_mode: d.exam_number_mode,
-      class_prefix_enabled: d.class_prefix_enabled,
-      name_ocr_enabled: d.name_ocr_enabled,
-      tilt_threshold: Number(d.tilt_threshold),
-      perspective_enabled: d.perspective_enabled,
-      deskew_enabled: d.deskew_enabled,
-      description: d.description || '',
-    })
-    regions.value = (d.regions || []).map((r) => ({
-      ...r,
-      page_index: Number(r.page_index),
-      x: Number(r.x),
-      y: Number(r.y),
-      width: Number(r.width),
-      height: Number(r.height),
-      max_score: Number(r.max_score),
-      options_count: Number(r.options_count),
-      knowledge_tags: r.knowledge_tags || [],
-    }))
+    const [, choiceRes] = await Promise.all([refreshTemplate(), getChoiceAnswers(templateId)])
+    await loadPages()
     for (const a of choiceRes.data) {
       choiceAnswerMap[a.question_number] = a.correct_options
     }
@@ -597,7 +1069,6 @@ async function runPrecheck() {
   }
   prechecking.value = true
   try {
-    // 预校验基于服务端最新配置，先静默保存当前改动
     await updateTemplate(templateId, { ...tpl })
     await replaceRegions(templateId, regions.value)
     const res = await precheckTemplate(templateId)
@@ -611,7 +1082,8 @@ async function runPrecheck() {
 onMounted(load)
 onBeforeUnmount(() => {
   removeListeners()
-  Object.values(bgImages).forEach((u) => URL.revokeObjectURL(u))
+  Object.values(pageImages).forEach((u) => URL.revokeObjectURL(u))
+  Object.values(localSamples).forEach((u) => URL.revokeObjectURL(u))
 })
 </script>
 
@@ -644,7 +1116,7 @@ onBeforeUnmount(() => {
   overflow-y: auto;
 }
 .side.left {
-  width: 320px;
+  width: 330px;
   flex-shrink: 0;
 }
 .side.right {
@@ -653,21 +1125,52 @@ onBeforeUnmount(() => {
 }
 .side h3 {
   font-size: 14px;
-  margin: 14px 0 8px;
+  margin: 16px 0 8px;
   color: #303133;
 }
 .side h3:first-child {
   margin-top: 0;
 }
-.margins {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
+.page-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
 }
-.margins-tip {
-  grid-column: 1 / -1;
+.page-card {
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.page-card.active {
+  border-color: #409eff;
+  background: #ecf5ff;
+}
+.page-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 600;
+}
+.page-card-meta {
   font-size: 12px;
   color: #909399;
+  margin: 4px 0 6px;
+}
+.page-card-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.page-card-actions .del {
+  color: #c0c4cc;
+  cursor: pointer;
+}
+.page-card-actions .del:hover {
+  color: #f56c6c;
 }
 .canvas-wrap {
   flex: 1;
@@ -706,7 +1209,6 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   object-fit: fill;
-  opacity: 0.65;
   pointer-events: none;
 }
 .margin-guide {
@@ -726,6 +1228,7 @@ onBeforeUnmount(() => {
 .region.selected {
   border-width: 2px;
   box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.35);
+  overflow: visible;
 }
 .region.t-exam_number {
   border-color: #1890ff;
@@ -749,12 +1252,23 @@ onBeforeUnmount(() => {
   left: 3px;
   color: #606266;
   white-space: nowrap;
+  z-index: 2;
 }
-.bubble {
-  display: inline-block;
-  margin: 16px 2px 0 2px;
-  font-size: 10px;
-  color: #909399;
+.marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(250, 140, 22, 0.9);
+  border-radius: 50%;
+  background: rgba(250, 140, 22, 0.18);
+  font-size: 8px;
+  line-height: 1;
+  color: #d46b08;
+  text-align: center;
+  pointer-events: none;
+}
+.t-exam_number .marker {
+  border-color: rgba(24, 144, 255, 0.9);
+  background: rgba(24, 144, 255, 0.18);
 }
 .handle {
   position: absolute;
@@ -766,6 +1280,7 @@ onBeforeUnmount(() => {
   border: 1px solid #fff;
   border-radius: 2px;
   cursor: nwse-resize;
+  z-index: 3;
 }
 .region-form {
   border-bottom: 1px solid #f0f0f0;
@@ -775,6 +1290,8 @@ onBeforeUnmount(() => {
   list-style: none;
   padding: 0;
   margin: 0;
+  max-height: 260px;
+  overflow-y: auto;
 }
 .region-list li {
   display: flex;
@@ -812,6 +1329,38 @@ onBeforeUnmount(() => {
 }
 .region-list .del:hover {
   color: #f56c6c;
+}
+.tune-stage {
+  position: relative;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #fafafa;
+  margin: 0 auto;
+}
+.tune-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+}
+.tune-marker {
+  z-index: 2;
+}
+.tune-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.tune-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: #606266;
 }
 .tip {
   font-size: 12px;

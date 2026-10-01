@@ -255,6 +255,42 @@ def _choice_ratios_by_contours(gray: np.ndarray, options_count: int) -> Optional
     return ratios
 
 
+def _decide(
+    ratios: Sequence[float],
+    letters: Sequence[str],
+    fill_threshold: float,
+    ambiguity_margin: float,
+) -> dict:
+    """由各选项填涂占比判定作答：ok / blank / multi / ambiguous。"""
+    options_count = len(ratios)
+    ordered = sorted(range(options_count), key=lambda i: -ratios[i])
+    filled = [i for i in range(options_count) if ratios[i] >= fill_threshold]
+    top = ratios[ordered[0]]
+    second = ratios[ordered[1]] if options_count > 1 else 0.0
+
+    if not filled:
+        status, options = "blank", ""
+    elif len(filled) > 1:
+        status, options = "multi", "".join(letters[i] for i in sorted(filled))
+    else:
+        options = letters[ordered[0]]
+        if second >= fill_threshold * 0.8 and (top - second) <= ambiguity_margin:
+            status = "ambiguous"
+        else:
+            status = "ok"
+
+    confidence = float(np.clip(0.6 * min(top / 0.8, 1.0) + 0.4 * min(max(top - second, 0.0) / 0.4, 1.0), 0.0, 1.0))
+    if status in ("blank", "unreadable"):
+        confidence = 0.0
+
+    return {
+        "options": options,
+        "ratios": [round(float(r), 4) for r in ratios],
+        "confidence": round(confidence, 3),
+        "status": status,
+    }
+
+
 def recognize_choice(
     region_image: np.ndarray,
     options_count: int = 4,
@@ -297,31 +333,35 @@ def recognize_choice(
     if ratios is None:
         return empty
 
-    ordered = sorted(range(options_count), key=lambda i: -ratios[i])
-    filled = [i for i in range(options_count) if ratios[i] >= fill_threshold]
-    top = ratios[ordered[0]]
-    second = ratios[ordered[1]] if options_count > 1 else 0.0
+    return _decide(ratios, letters, fill_threshold, ambiguity_margin)
 
-    if not filled:
-        status = "blank"
-        options = ""
-    elif len(filled) > 1:
-        status = "multi"
-        options = "".join(letters[i] for i in sorted(filled))
-    else:
-        options = letters[ordered[0]]
-        if second >= fill_threshold * 0.8 and (top - second) <= ambiguity_margin:
-            status = "ambiguous"
-        else:
-            status = "ok"
 
-    confidence = float(np.clip(0.6 * min(top / 0.8, 1.0) + 0.4 * min(max(top - second, 0.0) / 0.4, 1.0), 0.0, 1.0))
-    if status in ("blank", "unreadable"):
-        confidence = 0.0
+def recognize_choice_by_bubbles(
+    region_image: np.ndarray,
+    bubble_centers: Sequence[Tuple[float, float]],
+    fill_threshold: float = 0.45,
+    bubble_radius_fraction: float = 0.05,
+    ambiguity_margin: float = 0.12,
+) -> dict:
+    """按显式气泡中心识别选择题（标注式答题卡主路径）。
 
-    return {
-        "options": options,
-        "ratios": [round(float(r), 4) for r in ratios],
-        "confidence": round(confidence, 3),
-        "status": status,
-    }
+    bubble_centers：每个选项气泡中心在区域内的相对坐标 (cx, cy)，取值 0~1。
+    该坐标由模板框选时确定并持久化，因此可适配任意真实印刷答题卡
+    （横排 / 竖排 / 多栏 / 任意间距），不再依赖渲染常量反推。
+    """
+    options_count = len(bubble_centers)
+    letters = [chr(ord("A") + i) for i in range(options_count)]
+    empty = {"options": "", "ratios": [0.0] * options_count, "confidence": 0.0, "status": "unreadable"}
+
+    gray = to_gray(region_image)
+    if gray.size == 0 or options_count < 2:
+        return empty
+
+    h, w = gray.shape[:2]
+    binary = _binarize(gray)
+    radius = max(2, int(round(bubble_radius_fraction * h)))
+    ratios = [
+        _sample_core_ratio(binary, float(cx) * w, float(cy) * h, radius)
+        for cx, cy in bubble_centers
+    ]
+    return _decide(ratios, letters, fill_threshold, ambiguity_margin)

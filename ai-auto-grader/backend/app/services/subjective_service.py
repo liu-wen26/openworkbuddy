@@ -45,6 +45,11 @@ def ensure_results(db: Session, exam_id: UUID) -> List[SubjectiveResult]:
     """按非选择题题块补齐评分任务（幂等）。返回该考试全部非选择题评分结果。"""
     exam = _get_exam_or_404(db, exam_id)
     regions = _region_map(db, exam)
+    # 题块组（group_key）满分 = 组内各区域分值之和，保证合并后一题一任务的满分正确
+    group_max: Dict[str, float] = {}
+    for r in regions.values():
+        if r.region_type == "subjective" and r.group_key:
+            group_max[r.group_key] = group_max.get(r.group_key, 0.0) + float(r.max_score or 0)
     blocks = (
         db.query(AnswerBlock)
         .filter(AnswerBlock.exam_id == exam_id, AnswerBlock.block_type == "subjective")
@@ -59,6 +64,10 @@ def ensure_results(db: Session, exam_id: UUID) -> List[SubjectiveResult]:
         if block.id in existing:
             continue
         region = regions.get(block.region_id)
+        if region and region.group_key and region.group_key in group_max:
+            max_score = group_max[region.group_key]
+        else:
+            max_score = float(region.max_score or 0) if region else 0
         result = SubjectiveResult(
             exam_id=exam_id,
             student_id=block.student_id,
@@ -66,7 +75,7 @@ def ensure_results(db: Session, exam_id: UUID) -> List[SubjectiveResult]:
             block_id=block.id,
             region_id=block.region_id,
             question_number=block.question_number,
-            max_score=float(region.max_score or 0) if region else 0,
+            max_score=max_score,
             grading_mode="manual",
             status="pending",
         )

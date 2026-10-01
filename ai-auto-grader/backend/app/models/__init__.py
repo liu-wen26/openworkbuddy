@@ -2,6 +2,7 @@ from app.models.user import User
 from app.models.exam import Exam, ExamTeacher
 from app.models.student import Student, ExamStudent
 from app.models.template import AnswerCardTemplate
+from app.models.template_page import TemplatePage
 from app.models.template_config import TemplateRegion, ChoiceAnswer, AIScoringConfig
 from app.models.import_batch import ImportBatch
 from app.models.imported_page import ImportedPage
@@ -22,6 +23,7 @@ __all__ = [
     "Student",
     "ExamStudent",
     "AnswerCardTemplate",
+    "TemplatePage",
     "TemplateRegion",
     "ChoiceAnswer",
     "AIScoringConfig",

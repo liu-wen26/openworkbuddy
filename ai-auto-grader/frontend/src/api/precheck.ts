@@ -1,6 +1,6 @@
 import request from './request'
 
-export type PrecheckStatus = 'active' | 'cleared'
+export type PrecheckStatus = 'active' | 'running' | 'cleared'
 export type PrecheckPageStatus = 'pending' | 'processed' | 'exception'
 
 export interface PrecheckSummary {

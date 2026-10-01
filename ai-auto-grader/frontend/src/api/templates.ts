@@ -19,12 +19,16 @@ export interface TemplateRegion {
   partial_score_rules?: any
   knowledge_tags?: any
   config?: Record<string, any> | null
+  group_key?: string | null
+  option_spec?: Record<string, any> | null
 }
 
 export interface Template {
   id: string
   name: string
   subject?: string | null
+  source_type: 'generated' | 'annotated'
+  orientation: 'portrait' | 'landscape'
   paper_size: 'A3' | 'A4'
   duplex: boolean
   page_count: number
@@ -43,9 +47,18 @@ export interface Template {
   is_blank: boolean
   description?: string | null
   source_pdf_path?: string | null
+  page_sizes?: TemplatePageSize[] | null
   created_by: string
   created_at: string
   updated_at: string
+}
+
+export interface TemplatePageSize {
+  page_index: number
+  width_px: number
+  height_px: number
+  orientation: 'portrait' | 'landscape'
+  is_blank: boolean
 }
 
 export interface TemplateDetail extends Template {
@@ -137,6 +150,8 @@ export function replaceRegions(id: string, regions: TemplateRegion[]) {
     partial_score_rules: r.partial_score_rules ?? null,
     knowledge_tags: r.knowledge_tags ?? null,
     config: r.config ?? null,
+    group_key: r.group_key ?? null,
+    option_spec: r.option_spec ?? null,
   }))
   return request.put<TemplateRegion[]>(`/templates/${id}/regions`, payload)
 }
@@ -209,4 +224,100 @@ export interface PrecheckResult {
 
 export function precheckTemplate(id: string) {
   return request.post<PrecheckResult>(`/templates/${id}/precheck`)
+}
+
+// ---------------- 标注式底图页（上传真实答题卡） ----------------
+
+export interface TemplatePage {
+  id: string
+  template_id: string
+  page_index: number
+  width_px: number
+  height_px: number
+  orientation: 'portrait' | 'landscape'
+  is_blank: boolean
+  blank_ratio?: number | null
+  status: string
+}
+
+export interface TemplatePageUploadResult {
+  added: number
+  pages: TemplatePage[]
+}
+
+export function uploadTemplatePages(id: string, files: File[]) {
+  const form = new FormData()
+  files.forEach((file) => form.append('files', file))
+  return request.post<TemplatePageUploadResult>(`/templates/${id}/pages`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 300000,
+  })
+}
+
+export function getTemplatePages(id: string) {
+  return request.get<TemplatePage[]>(`/templates/${id}/pages`)
+}
+
+export function updateTemplatePage(id: string, pageIndex: number, isBlank: boolean) {
+  return request.patch<TemplatePage>(`/templates/${id}/pages/${pageIndex}`, { is_blank: isBlank })
+}
+
+export function deleteTemplatePage(id: string, pageIndex: number) {
+  return request.delete(`/templates/${id}/pages/${pageIndex}`)
+}
+
+export async function getTemplatePageImageUrl(id: string, pageIndex: number, thumb = true) {
+  const res = await request.get(`/templates/${id}/pages/${pageIndex}/image`, {
+    params: { thumb },
+    responseType: 'blob',
+  })
+  return URL.createObjectURL(res.data)
+}
+
+export interface CropBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export async function getTemplatePageCropUrl(id: string, pageIndex: number, box: CropBox) {
+  const res = await request.get(`/templates/${id}/pages/${pageIndex}/crop`, {
+    params: box,
+    responseType: 'blob',
+  })
+  return URL.createObjectURL(res.data)
+}
+
+// ---------------- 选择题 / 考号 自动切格 ----------------
+
+export interface ChoiceGridRequest {
+  page_index: number
+  x: number
+  y: number
+  width: number
+  height: number
+  start_question: number
+  question_count: number
+  options_count: number
+  columns: number
+  direction: 'horizontal' | 'vertical'
+  score: number
+}
+
+export function buildChoiceGrid(id: string, payload: ChoiceGridRequest) {
+  return request.post<{ regions: TemplateRegion[] }>(`/templates/${id}/choice-grid`, payload)
+}
+
+export interface DigitGridRequest {
+  page_index: number
+  x: number
+  y: number
+  width: number
+  height: number
+  digits: number
+}
+
+export function buildDigitGrid(id: string, payload: DigitGridRequest) {
+  return request.post<{ option_spec: Record<string, any> }>(`/templates/${id}/digit-grid`, payload)
 }
