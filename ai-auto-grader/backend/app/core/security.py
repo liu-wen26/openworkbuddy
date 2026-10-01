@@ -1,0 +1,55 @@
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+from uuid import UUID
+
+import bcrypt
+from jose import JWTError, jwt
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+from app.core.config import get_settings
+from app.schemas.user import TokenPayload
+
+security = HTTPBearer(auto_error=False)
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+
+
+def get_password_hash(password: str) -> str:
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+
+def create_access_token(subject: str, expires_delta: Optional[timedelta] = None) -> str:
+    settings = get_settings()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode = {"exp": expire, "sub": subject}
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def decode_token(token: str) -> Optional[TokenPayload]:
+    settings = get_settings()
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            return None
+        return TokenPayload(sub=user_id, exp=payload.get("exp"))
+    except JWTError:
+        return None
+
+
+async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(security)) -> UUID:
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    payload = decode_token(credentials.credentials)
+    if payload is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    try:
+        return UUID(payload.sub)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject")
